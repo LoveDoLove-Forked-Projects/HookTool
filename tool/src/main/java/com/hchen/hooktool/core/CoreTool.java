@@ -1284,79 +1284,149 @@ public class CoreTool extends XposedLog {
     // ------------------------- DeoptimizeMethod ------------------------
 
     // -------------------------- Method Deoptimize -------------------------------
+
+    /**
+     * 去优化指定方法
+     */
     public static boolean deoptimizeMethod(@NonNull Class<?> clazz, @NonNull String methodName, @NonNull Object... params) {
         return doTry(
             () -> deoptimizeMethod(findMethod(clazz, methodName, params))
         ).orElse(false);
     }
 
+    /**
+     * 去优化指定方法
+     */
     public static boolean deoptimizeMethod(@NonNull String classPath, @NonNull String methodName, @NonNull Object... params) {
         return doTry(
             () -> deoptimizeMethod(findMethod(classPath, methodName, params))
         ).orElse(false);
     }
 
+    /**
+     * 去优化指定方法
+     */
     public static boolean deoptimizeMethod(@NonNull String classPath, ClassLoader classLoader, @NonNull String methodName, @NonNull Object... params) {
         return doTry(
             () -> deoptimizeMethod(findMethod(classPath, classLoader, methodName, params))
         ).orElse(false);
     }
 
+    /**
+     * 去优化全部指定名称的方法
+     */
     public static boolean deoptimizeAllMethod(@NonNull Class<?> clazz, @NonNull String methodName) {
         return doTry(
             () -> deoptimizeMethod(findAllMethod(clazz, methodName))
         ).orElse(false);
     }
 
+    /**
+     * 去优化全部指定名称的方法
+     */
     public static boolean deoptimizeAllMethod(@NonNull String classPath, @NonNull String methodName) {
         return doTry(
             () -> deoptimizeMethod(findAllMethod(classPath, methodName))
         ).orElse(false);
     }
 
+    /**
+     * 去优化全部指定名称的方法
+     */
     public static boolean deoptimizeAllMethod(@NonNull String classPath, ClassLoader classLoader, @NonNull String methodName) {
         return doTry(
             () -> deoptimizeMethod(findAllMethod(classPath, classLoader, methodName))
         ).orElse(false);
     }
 
+    /**
+     * 去优化全部方法
+     */
+    public static boolean deoptimizeAllMethod(@NonNull Class<?> clazz) {
+        return doTry(
+            () -> deoptimizeMethod(findAllMethod(clazz))
+        ).orElse(false);
+    }
+
+    /**
+     * 去优化全部方法
+     */
+    public static boolean deoptimizeAllMethod(@NonNull String classPath) {
+        return doTry(
+            () -> deoptimizeMethod(findAllMethod(classPath))
+        ).orElse(false);
+    }
+
+    /**
+     * 去优化全部方法
+     */
+    public static boolean deoptimizeAllMethod(@NonNull String classPath, ClassLoader classLoader) {
+        return doTry(
+            () -> deoptimizeMethod(findAllMethod(classPath, classLoader))
+        ).orElse(false);
+    }
+
     // -------------------------- Constructor Deoptimize ----------------------------
+
+    /**
+     * 去优化指定构造函数
+     */
     public static boolean deoptimizeConstructor(@NonNull Class<?> clazz, @NonNull Object... params) {
         return doTry(
             () -> deoptimizeMethod(findConstructor(clazz, params))
         ).orElse(false);
     }
 
+    /**
+     * 去优化指定构造函数
+     */
     public static boolean deoptimizeConstructor(@NonNull String classPath, @NonNull Object... params) {
         return doTry(
             () -> deoptimizeMethod(findConstructor(classPath, params))
         ).orElse(false);
     }
 
+    /**
+     * 去优化指定构造函数
+     */
     public static boolean deoptimizeConstructor(@NonNull String classPath, ClassLoader classLoader, @NonNull Object... params) {
         return doTry(
             () -> deoptimizeMethod(findConstructor(classPath, classLoader, params))
         ).orElse(false);
     }
 
+    /**
+     * 去优化全部构造函数
+     */
     public static boolean deoptimizeAllConstructor(@NonNull Class<?> clazz) {
         return doTry(
             () -> deoptimizeMethod(findAllConstructor(clazz))
         ).orElse(false);
     }
 
+    /**
+     * 去优化全部构造函数
+     */
     public static boolean deoptimizeAllConstructor(@NonNull String classPath) {
         return doTry(
             () -> deoptimizeMethod(findAllConstructor(classPath))
         ).orElse(false);
     }
 
+    /**
+     * 去优化全部构造函数
+     */
     public static boolean deoptimizeAllConstructor(@NonNull String classPath, ClassLoader classLoader) {
         return doTry(
             () -> deoptimizeMethod(findAllConstructor(classPath, classLoader))
         ).orElse(false);
     }
 
+    // -------------------------- Members Deoptimize ----------------------------
+
+    /**
+     * 去优化全部成员
+     */
     public static boolean deoptimizeMethod(@NonNull Member... member) {
         return doTry(() -> {
             for (Member m : member) {

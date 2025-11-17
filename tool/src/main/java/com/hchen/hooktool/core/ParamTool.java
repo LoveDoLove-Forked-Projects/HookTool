@@ -22,6 +22,7 @@ import static com.hchen.hooktool.core.CoreTool.callMethod;
 import static com.hchen.hooktool.core.CoreTool.callMethodIfExists;
 import static com.hchen.hooktool.core.CoreTool.callStaticMethod;
 import static com.hchen.hooktool.core.CoreTool.callStaticMethodIfExists;
+import static com.hchen.hooktool.core.CoreTool.deoptimizeMethod;
 import static com.hchen.hooktool.core.CoreTool.existsAnyMethod;
 import static com.hchen.hooktool.core.CoreTool.existsConstructor;
 import static com.hchen.hooktool.core.CoreTool.existsField;
@@ -111,8 +112,7 @@ public class ParamTool {
         return param.args[index];
     }
 
-    @NonNull
-    final public Object getArgNonNull(int index, @NonNull Object def) {
+    @NonNull final public Object getArgNonNull(int index, @NonNull Object def) {
         return Optional.ofNullable(param.args[index]).orElse(def);
     }
 
@@ -450,6 +450,15 @@ public class ParamTool {
     final public Object invokeThisOriginalMethod(@NonNull Object... params)
         throws InvocationTargetException, IllegalAccessException {
         return invokeOriginalMethod(param.method, param.thisObject, params);
+    }
+
+    // ------------------------------------- Deoptimize -----------------------------------------
+
+    /**
+     * 去优化全部成员
+     */
+    final public boolean deoptimizeThisMethod() {
+        return deoptimizeMethod(param.method);
     }
 
     // ---------------------------------------- Other -------------------------------------------
