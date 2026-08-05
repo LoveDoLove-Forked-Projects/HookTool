@@ -25,19 +25,20 @@ import com.hchen.hooktool.ModuleConfig;
 /**
  * Android 平台原生日志输出工具类。
  * <p>
- * 该类封装了 {@link android.util.Log} 的系统级 API，为 HookTool 框架提供统一的日志输出通道。
- * 内部支持四个日志优先级：ERROR（{@code E}）、WARN（{@code W}）、INFO（{@code I}）和 DEBUG（{@code D}），
- * 每个优先级均提供纯文本、附带调用栈字符串、附带异常对象及两者兼具等多种重载形式。
- * <p>
- * 所有日志输出行为受全局配置约束：日志等级由 {@link ModuleConfig#getLogLevel()} 控制，
- * 低于当前方法所对应等级的调用将被静默忽略；日志标签由 {@link ModuleConfig#getLogTag()} 统一指定，
- * 调用者提供的 {@code tag} 参数会以 {@code [tag]} 的格式嵌入日志消息体中。
+ * 封装 {@link android.util.Log} 的系统级 API，为 HookTool 框架提供统一的日志输出通道。
+ * 输出逻辑复用 {@link AbstractLog} 的等级门控与消息格式化，本类仅负责将消息交给
+ * {@link android.util.Log}。所有日志输出受全局配置约束：等级由 {@link ModuleConfig#getLogLevel()}
+ * 控制，标签由 {@link ModuleConfig#getLogTag()} 统一指定；调用者提供的 {@code tag}
+ * 参数以 {@code [tag]} 的格式嵌入日志消息体中。
  *
  * @author 焕晨HChen
- * @see ModuleConfig#getLogLevel()
- * @see ModuleConfig#getLogTag()
+ * @see AbstractLog
+ * @see XposedLog
  */
-public class AndroidLog {
+public class AndroidLog extends AbstractLog {
+    /** 本类输出目标单例，供静态门面委托。 */
+    private static final AbstractLog IMPL = new AndroidLog();
+
     private AndroidLog() {
     }
 
@@ -53,23 +54,20 @@ public class AndroidLog {
      * @param log 待输出的日志正文
      */
     public static void logE(String tag, String log) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_E) return;
-        Log.e(ModuleConfig.getLogTag(), "[" + tag + "]" + "[E]: " + log);
+        logAt(IMPL, ModuleConfig.LOG_E, tag, log, null, null);
     }
 
     /**
      * 以 ERROR 级别输出一条附带调用栈字符串的日志。
      * <p>
      * 日志格式为：{@code [tag][E]: log[Stack Info]: stackTrace}。
-     * 适用于需要手动传入预格式化堆栈信息的场景。
      *
      * @param tag        业务侧自定义标识
      * @param log        待输出的日志正文
      * @param stackTrace 以字符串形式提供的调用栈信息，将追加到消息末尾
      */
     public static void logE(String tag, String log, String stackTrace) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_E) return;
-        Log.e(ModuleConfig.getLogTag(), "[" + tag + "]" + "[E]: " + log + "\n[Stack Info]: " + stackTrace);
+        logAt(IMPL, ModuleConfig.LOG_E, tag, log, stackTrace, null);
     }
 
     /**
@@ -81,22 +79,18 @@ public class AndroidLog {
      * @param throwable 待记录的异常实例
      */
     public static void logE(String tag, Throwable throwable) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_E) return;
-        Log.e(ModuleConfig.getLogTag(), "[" + tag + "]" + "[E]: ", throwable);
+        logAt(IMPL, ModuleConfig.LOG_E, tag, null, null, throwable);
     }
 
     /**
      * 以 ERROR 级别输出一条同时包含文本描述和异常信息的日志。
-     * <p>
-     * 文本消息作为日志主体输出，异常对象的堆栈信息将作为附加内容由底层引擎格式化。
      *
      * @param tag       业务侧自定义标识
      * @param log       待输出的日志正文
      * @param throwable 待记录的异常实例
      */
     public static void logE(String tag, String log, Throwable throwable) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_E) return;
-        Log.e(ModuleConfig.getLogTag(), "[" + tag + "]" + "[E]: " + log, throwable);
+        logAt(IMPL, ModuleConfig.LOG_E, tag, log, null, throwable);
     }
 
     // -------- logW --------------
@@ -110,8 +104,7 @@ public class AndroidLog {
      * @param log 待输出的日志正文
      */
     public static void logW(String tag, String log) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_W) return;
-        Log.w(ModuleConfig.getLogTag(), "[" + tag + "]" + "[W]: " + log);
+        logAt(IMPL, ModuleConfig.LOG_W, tag, log, null, null);
     }
 
     /**
@@ -122,8 +115,7 @@ public class AndroidLog {
      * @param stackTrace 以字符串形式提供的调用栈信息
      */
     public static void logW(String tag, String log, String stackTrace) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_W) return;
-        Log.w(ModuleConfig.getLogTag(), "[" + tag + "]" + "[W]: " + log + "\n[Stack Info]: " + stackTrace);
+        logAt(IMPL, ModuleConfig.LOG_W, tag, log, stackTrace, null);
     }
 
     /**
@@ -133,8 +125,7 @@ public class AndroidLog {
      * @param throwable 待记录的异常实例
      */
     public static void logW(String tag, Throwable throwable) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_W) return;
-        Log.w(ModuleConfig.getLogTag(), "[" + tag + "]" + "[W]: ", throwable);
+        logAt(IMPL, ModuleConfig.LOG_W, tag, null, null, throwable);
     }
 
     /**
@@ -145,8 +136,7 @@ public class AndroidLog {
      * @param throwable 待记录的异常实例
      */
     public static void logW(String tag, String log, Throwable throwable) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_W) return;
-        Log.w(ModuleConfig.getLogTag(), "[" + tag + "]" + "[W]: " + log, throwable);
+        logAt(IMPL, ModuleConfig.LOG_W, tag, log, null, throwable);
     }
 
     // ------------ logI -------------
@@ -160,8 +150,7 @@ public class AndroidLog {
      * @param log 待输出的日志正文
      */
     public static void logI(String tag, String log) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_I) return;
-        Log.i(ModuleConfig.getLogTag(), "[" + tag + "]" + "[I]: " + log);
+        logAt(IMPL, ModuleConfig.LOG_I, tag, log, null, null);
     }
 
     /**
@@ -172,8 +161,7 @@ public class AndroidLog {
      * @param stackTrace 以字符串形式提供的调用栈信息
      */
     public static void logI(String tag, String log, String stackTrace) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_I) return;
-        Log.i(ModuleConfig.getLogTag(), "[" + tag + "]" + "[I]: " + log + "\n[Stack Info]: " + stackTrace);
+        logAt(IMPL, ModuleConfig.LOG_I, tag, log, stackTrace, null);
     }
 
     /**
@@ -183,8 +171,7 @@ public class AndroidLog {
      * @param throwable 待记录的异常实例
      */
     public static void logI(String tag, Throwable throwable) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_I) return;
-        Log.i(ModuleConfig.getLogTag(), "[" + tag + "]" + "[I]: ", throwable);
+        logAt(IMPL, ModuleConfig.LOG_I, tag, null, null, throwable);
     }
 
     /**
@@ -195,8 +182,7 @@ public class AndroidLog {
      * @param throwable 待记录的异常实例
      */
     public static void logI(String tag, String log, Throwable throwable) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_I) return;
-        Log.i(ModuleConfig.getLogTag(), "[" + tag + "]" + "[I]: " + log, throwable);
+        logAt(IMPL, ModuleConfig.LOG_I, tag, log, null, throwable);
     }
 
     // ---------- logD ---------------
@@ -210,8 +196,7 @@ public class AndroidLog {
      * @param log 待输出的日志正文
      */
     public static void logD(String tag, String log) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_D) return;
-        Log.d(ModuleConfig.getLogTag(), "[" + tag + "]" + "[D]: " + log);
+        logAt(IMPL, ModuleConfig.LOG_D, tag, log, null, null);
     }
 
     /**
@@ -222,8 +207,7 @@ public class AndroidLog {
      * @param stackTrace 以字符串形式提供的调用栈信息
      */
     public static void logD(String tag, String log, String stackTrace) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_D) return;
-        Log.d(ModuleConfig.getLogTag(), "[" + tag + "]" + "[D]: " + log + "\n[Stack Info]: " + stackTrace);
+        logAt(IMPL, ModuleConfig.LOG_D, tag, log, stackTrace, null);
     }
 
     /**
@@ -233,8 +217,7 @@ public class AndroidLog {
      * @param throwable 待记录的异常实例
      */
     public static void logD(String tag, Throwable throwable) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_D) return;
-        Log.d(ModuleConfig.getLogTag(), "[" + tag + "]" + "[D]: ", throwable);
+        logAt(IMPL, ModuleConfig.LOG_D, tag, null, null, throwable);
     }
 
     /**
@@ -245,7 +228,46 @@ public class AndroidLog {
      * @param throwable 待记录的异常实例
      */
     public static void logD(String tag, String log, Throwable throwable) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_D) return;
-        Log.d(ModuleConfig.getLogTag(), "[" + tag + "]" + "[D]: " + log, throwable);
+        logAt(IMPL, ModuleConfig.LOG_D, tag, log, null, throwable);
+    }
+
+    /**
+     * 包级私有输出桥：将格式化消息输出到 {@link android.util.Log}。
+     * <p>
+     * 调用者 {@code tag} 以 {@code [tag]} 嵌入消息体（{@link android.util.Log} 只能按全局
+     * {@link ModuleConfig#getLogTag()} 过滤），异常按优先级分发到对应 {@code Log.x} 方法。
+     * 该桥同时被 {@link XposedLog} 在非 Xposed 环境回落时复用。
+     *
+     * @param priority  {@link android.util.Log} 优先级常量
+     * @param tag       调用方自定义标识
+     * @param message   已格式化的消息体（含等级前缀）
+     * @param throwable 待记录的异常，可为 {@code null}
+     */
+    static void output(int priority, String tag, String message, Throwable throwable) {
+        String fullTag = ModuleConfig.getLogTag();
+        String fullMsg = "[" + tag + "]" + message;
+        if (throwable == null) {
+            Log.println(priority, fullTag, fullMsg);
+        } else {
+            switch (priority) {
+                case Log.ERROR:
+                    Log.e(fullTag, fullMsg, throwable);
+                    break;
+                case Log.WARN:
+                    Log.w(fullTag, fullMsg, throwable);
+                    break;
+                case Log.INFO:
+                    Log.i(fullTag, fullMsg, throwable);
+                    break;
+                default:
+                    Log.d(fullTag, fullMsg, throwable);
+                    break;
+            }
+        }
+    }
+
+    @Override
+    protected void log(int priority, String tag, String message, Throwable throwable) {
+        output(priority, tag, message, throwable);
     }
 }

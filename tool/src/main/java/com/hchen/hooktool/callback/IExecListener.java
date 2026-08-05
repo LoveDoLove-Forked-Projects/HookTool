@@ -35,6 +35,9 @@ public interface IExecListener {
      * <p>
      * 当 Shell 命令执行后产生标准输出数据时触发此回调。
      * 输出内容以字符串数组形式传递，每个元素代表一行输出。
+     * <p>
+     * 注意：该回调对同步命令与异步命令均会触发（异步命令结果可通过
+     * {@code Future} 或本回调获取）。
      *
      * @param command  已执行的 Shell 命令字符串，不为 {@code null}
      * @param exitCode 命令的退出码字符串，不为 {@code null}
@@ -48,6 +51,8 @@ public interface IExecListener {
      * <p>
      * 当 Shell 命令执行后产生错误输出数据时触发此回调。
      * 错误信息以字符串数组形式传递，每个元素代表一行错误信息。
+     * <p>
+     * 注意：该回调对同步命令与异步命令均会触发。
      *
      * @param command  已执行的 Shell 命令字符串，不为 {@code null}
      * @param exitCode 命令的退出码字符串，不为 {@code null}
@@ -64,18 +69,20 @@ public interface IExecListener {
      * @param hasRoot  {@code true} 表示设备已获取 Root 权限，{@code false} 表示未获取
      * @param exitCode 检测命令的退出码字符串，不为 {@code null}
      */
-    default void rootResult(boolean hasRoot, @NonNull String exitCode) {
+    default void onRootResult(boolean hasRoot, @NonNull String exitCode) {
     }
 
     /**
      * Shell 管道破裂的回调方法。
      * <p>
-     * 当 Shell 进程的输入/输出流非正常终止时触发此回调，
-     * 通常表示命令执行过程中发生了底层通信异常。
+     * 仅在 Shell 进程<strong>异常死亡</strong>时触发一次（如 shell 崩溃、被外部杀死、
+     * 或底层通信异常），正常的 {@code close()} 关闭不会触发。
+     * 回调触发后框架会自动关闭内部进程流，且<strong>不会自动重建</strong>；
+     * 调用方需要重新通过 {@code ShellTool.obtain()} 显式恢复。
      *
      * @param reason 管道破裂的原因描述文本，不为 {@code null}
      * @param errors 管道破裂时附带的错误输出内容数组，不为 {@code null}
      */
-    default void brokenPip(@NonNull String reason, @NonNull String[] errors) {
+    default void brokenPipe(@NonNull String reason, @NonNull String[] errors) {
     }
 }

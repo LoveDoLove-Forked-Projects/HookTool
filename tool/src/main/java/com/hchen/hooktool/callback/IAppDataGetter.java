@@ -21,22 +21,38 @@ package com.hchen.hooktool.callback;
 import android.content.pm.PackageManager;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 
-import com.hchen.hooktool.data.AppData;
+import com.hchen.hooktool.utils.PackageTool;
 
 import java.util.List;
 
 /**
- * 应用数据获取回调接口。
+ * 应用包信息查询契约接口。
  * <p>
- * 该接口定义了从 {@link PackageManager} 查询应用包信息的标准契约，
- * 并提供了异步查询完成后的回调机制。泛型 {@code T} 用于指定
- * 包信息元素的具体类型，以支持不同精度的查询需求。
+ * 该接口定义了从 {@link PackageManager} 查询应用包信息的标准约定，
+ * 由 {@link PackageTool#getAppData} 在转换阶段消费。泛型 {@code T} 表示
+ * 包信息元素的类型，合法的取值仅限于以下受支持类型之一：
+ * <ul>
+ *     <li>{@link android.content.pm.PackageInfo}</li>
+ *     <li>{@link android.content.pm.ApplicationInfo}</li>
+ *     <li>{@link android.content.pm.ResolveInfo}</li>
+ *     <li>{@link android.content.pm.ActivityInfo}</li>
+ *     <li>{@link android.content.pm.ServiceInfo}</li>
+ *     <li>{@link android.content.pm.ProviderInfo}</li>
+ * </ul>
+ * 若 {@link #getPackages} 返回的列表包含上述类型之外的元素，
+ * {@link PackageTool#createAppData} 将在转换阶段抛出
+ * {@link IllegalArgumentException}。
+ * <p>
+ * 本接口不承诺任何线程模型：查询与转换均在调用线程内同步执行，
+ * 并发编排完全由调用方负责。
  *
  * @param <T> 包信息列表中元素的类型
  * @author 焕晨HChen
+ * @see PackageTool#getAppData(android.content.Context, boolean, IAppDataGetter)
+ * @see PackageTool#createAppData(PackageManager, Object, boolean)
  */
+@FunctionalInterface
 public interface IAppDataGetter<T> {
     /**
      * 从 PackageManager 中查询目标应用的包信息列表。
@@ -46,22 +62,10 @@ public interface IAppDataGetter<T> {
      * 以获取满足业务需求的包信息集合。
      *
      * @param pm 用于执行包信息查询的 {@link PackageManager} 实例，不为 {@code null}
-     * @return 包含目标应用包信息的列表，不为 {@code null}
-     * @throws PackageManager.NameNotFoundException 当指定的包名不存在时抛出
+     * @return 包含目标应用包信息的列表，不为 {@code null}；列表元素也不得为 {@code null}，
+     *         且元素类型必须落在类注释列出的受支持类型集合内
+     * @throws PackageManager.NameNotFoundException 当查询的包信息无法获取时抛出
      */
     @NonNull
     List<T> getPackages(@NonNull PackageManager pm) throws PackageManager.NameNotFoundException;
-
-    /**
-     * 异步获取应用数据完成时的回调方法。
-     * <p>
-     * 当异步查询操作执行完毕后（不论成功或失败），框架将自动调用此方法。
-     * 查询成功时，{@code e} 参数为 {@code null}，{@code appData} 包含有效数据；
-     * 查询失败时，{@code e} 携带异常信息。
-     *
-     * @param appData 查询结果对应的应用数据数组，失败时可能为空或数据不完整
-     * @param e       查询过程中捕获的异常；查询成功时为 {@code null}
-     */
-    default void getAsyncAppData(@NonNull AppData[] appData, @Nullable PackageManager.NameNotFoundException e) {
-    }
 }

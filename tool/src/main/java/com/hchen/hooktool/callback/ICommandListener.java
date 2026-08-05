@@ -35,8 +35,8 @@ public interface ICommandListener {
      * 当一条 Shell 命令即将被执行时，框架将调用此方法。
      * 返回 {@code true} 表示放行该命令，返回 {@code false} 则拦截并取消执行。
      *
-     * @param cmd 即将被执行的 Shell 命令字符串，不为 {@code null}
+     * @param command 即将被执行的 Shell 命令字符串，不为 {@code null}
      * @return {@code true} 允许命令继续执行，{@code false} 拦截命令使其不被执行
      */
-    boolean onCommand(@NonNull String cmd);
+    boolean onCommand(@NonNull String command);
 }

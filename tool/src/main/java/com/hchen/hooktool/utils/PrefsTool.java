@@ -18,8 +18,6 @@
  */
 package com.hchen.hooktool.utils;
 
-import static com.hchen.hooktool.log.LogExpand.getStackTrace;
-
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -31,7 +29,7 @@ import com.hchen.hooktool.ModuleData;
 import com.hchen.hooktool.exception.UnexpectedException;
 import com.hchen.hooktool.log.AndroidLog;
 
-import java.util.Objects;
+import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
@@ -47,8 +45,8 @@ import java.util.function.Function;
  */
 public final class PrefsTool {
     private static final String TAG = "PrefsTool";
-    private static final ConcurrentHashMap<String, SharedPreferences> xPreferences = new ConcurrentHashMap<>(); // 宿主端
-    private static final ConcurrentHashMap<String, SharedPreferences> sPreferences = new ConcurrentHashMap<>(); // 模块端
+    private static final ConcurrentHashMap<String, SharedPreferences> hostPreferences = new ConcurrentHashMap<>(); // 宿主端
+    private static final ConcurrentHashMap<String, SharedPreferences> modulePreferences = new ConcurrentHashMap<>(); // 模块端
 
     private PrefsTool() {
     }
@@ -110,7 +108,7 @@ public final class PrefsTool {
     private static SharedPreferences createSharedPreferences(@NonNull String prefsName) {
         String resolvedName = initPrefsName(prefsName);
         String key = ModuleData.getModulePackageName() + resolvedName;
-        return xPreferences.computeIfAbsent(key, new Function<String, SharedPreferences>() {
+        return hostPreferences.computeIfAbsent(key, new Function<String, SharedPreferences>() {
             @Override
             public SharedPreferences apply(String k) {
                 return ModuleData.getRemotePreferences(resolvedName);
@@ -122,16 +120,16 @@ public final class PrefsTool {
     private static SharedPreferences createSharedPreferences(@NonNull Context context, @NonNull String prefsName) {
         String resolvedName = initPrefsName(prefsName);
         String key = context.getPackageName() + resolvedName;
-        return sPreferences.computeIfAbsent(key, new Function<String, SharedPreferences>() {
+        return modulePreferences.computeIfAbsent(key, new Function<String, SharedPreferences>() {
             @Override
             public SharedPreferences apply(String k) {
                 SharedPreferences preferences;
                 try {
                     // noinspection deprecation
                     preferences = context.getSharedPreferences(resolvedName, Context.MODE_WORLD_READABLE);
-                } catch (Throwable ignored) {
+                } catch (Throwable e) {
                     preferences = context.getSharedPreferences(resolvedName, Context.MODE_PRIVATE);
-                    AndroidLog.logW(TAG, "Maybe unsupported prefs.", getStackTrace());
+                    AndroidLog.logW(TAG, "Maybe unsupported prefs.", e);
                 }
                 return preferences;
             }
@@ -155,14 +153,12 @@ public final class PrefsTool {
      */
     @NonNull
     private static String initPrefsName(@NonNull String name) {
-        Objects.requireNonNull(name, "Prefs name must not be null.");
-
         if (name.isEmpty()) {
             if (ModuleConfig.getPrefsName().isEmpty()) {
                 if (ModuleData.getModulePackageName().isEmpty())
                     throw new UnexpectedException("What prefs name you want use?");
 
-                return ModuleData.getModulePackageName().toLowerCase() + "_prefs";
+                return ModuleData.getModulePackageName().toLowerCase(Locale.ROOT) + "_prefs";
             }
             return ModuleConfig.getPrefsName();
         } else return name;

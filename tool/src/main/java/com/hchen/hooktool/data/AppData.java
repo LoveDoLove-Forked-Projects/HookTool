@@ -25,6 +25,7 @@ import android.os.Parcel;
 import android.os.Parcelable;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.util.Objects;
 
@@ -43,6 +44,7 @@ import java.util.Objects;
 public class AppData implements Parcelable {
     /**
      * 与该应用关联的 {@link PackageInfo} 对象，其中包含完整的包级别元数据信息。
+     * 仅当输入为 {@link PackageInfo} 类型时才会被填充，其余输入类型下恒为 {@code null}。
      */
     public PackageInfo packageInfo;
     /**
@@ -50,7 +52,7 @@ public class AppData implements Parcelable {
      */
     public ApplicationInfo applicationInfo;
     /**
-     * 多用户环境下的用户标识符。默认值 {@code -1} 表示未显式指定用户，通常对应设备的主用户。
+     * 多用户环境下的用户标识符。默认值 {@code -1} 表示尚未显式填充（例如获取失败），并非特指主用户。
      */
     public int user = -1;
     /**
@@ -58,11 +60,17 @@ public class AppData implements Parcelable {
      */
     public int uid = -1;
     /**
-     * 应用的图标位图。在图标加载失败或不可用时可能为 {@code null}。
+     * 应用的图标位图。
+     * <p>
+     * 默认不加载，为 {@code null}；仅在调用方显式传入 {@code loadIcon=true} 时填充。
+     * 该字段不参与 {@link Parcelable} 序列化，跨进程重建后恒为 {@code null}。
      */
+    @Nullable
     public Bitmap icon;
     /**
      * 应用面向用户展示的名称标签。
+     * <p>
+     * 在个别应用资源解析失败时可能为 {@code null}。
      */
     public String label;
     /**
@@ -72,17 +80,22 @@ public class AppData implements Parcelable {
     /**
      * 应用的版本名称字符串（例如 {@code "1.2.3"}）。仅当通过 {@link PackageInfo} 获取数据时才会被填充。
      */
-    public String versionName; // 仅 PackageInfo 下填充数据
+    public String versionName;
     /**
      * 应用的版本号字符串。仅当通过 {@link PackageInfo} 获取数据时才会被填充。
      */
-    public String versionCode; // 仅 PackageInfo 下填充数据
+    public String versionCode;
     /**
      * 指示该应用是否为系统预装应用。{@code true} 表示为系统应用。
      */
     public boolean isSystemApp;
     /**
      * 指示该应用当前是否处于启用状态。{@code true} 表示已启用，{@code false} 表示已被停用。
+     * <p>
+     * 注意：该标志取自 {@link ApplicationInfo#enabled} 的静态清单标志，
+     * 不等价于 {@link com.hchen.hooktool.utils.PackageTool#isDisabled} 的运行时启用设置状态
+     * （后者基于 {@link android.content.pm.PackageManager#getApplicationEnabledSetting}，
+     * 能区分用户禁用与临时禁用）。需要精确的禁用判定时请使用 {@code PackageTool.isDisabled}。
      */
     public boolean isEnabled;
 
@@ -140,6 +153,7 @@ public class AppData implements Parcelable {
      * 从 {@link Parcel} 反序列化构造 {@link AppData} 实例的私有构造方法。
      * <p>
      * 字段的读取顺序必须与 {@link #writeToParcel(Parcel, int)} 中的写入顺序严格一致。
+     * 注意：{@link #icon} 不参与序列化，重建后恒为 {@code null}。
      *
      * @param in 携带序列化数据的源 {@link Parcel} 对象
      */
@@ -148,7 +162,6 @@ public class AppData implements Parcelable {
         applicationInfo = in.readParcelable(ApplicationInfo.class.getClassLoader());
         user = in.readInt();
         uid = in.readInt();
-        icon = in.readParcelable(Bitmap.class.getClassLoader());
         label = in.readString();
         packageName = in.readString();
         versionName = in.readString();
@@ -159,6 +172,9 @@ public class AppData implements Parcelable {
 
     /**
      * 将本实例的全部字段按固定顺序序列化写入指定的 {@link Parcel}。
+     * <p>
+     * 注意：{@link #icon} 因可能携带大体积位图、且跨进程传输易超出 Binder 事务缓冲，
+     * 故不参与序列化。如需跨进程共享图标，请自行以字节流等旁路方式传递。
      *
      * @param dest  目标 {@link Parcel} 对象，序列化数据将写入此对象中
      * @param flags 附加控制标志，用于指示是否需要写入特殊对象引用（如文件描述符），通常传入 {@code 0}
@@ -169,7 +185,6 @@ public class AppData implements Parcelable {
         dest.writeParcelable(applicationInfo, flags);
         dest.writeInt(user);
         dest.writeInt(uid);
-        dest.writeParcelable(icon, flags);
         dest.writeString(label);
         dest.writeString(packageName);
         dest.writeString(versionName);

@@ -41,6 +41,9 @@ public final class TryHelper {
      * <p>
      * 该方法通过 {@link ResultData} 的构造过程捕获 {@link IDecomposer}
      * 执行期间抛出的任何异常（包括受检和非受检异常），调用方无需自行处理。
+     * <p>
+     * 此方法仅是 {@code new ResultData<>(supplier)} 的便捷形式（DSL 别名），
+     * 二者完全等价；当需要更细粒度的结果读取时可直接构造 {@link ResultData}。
      *
      * @param supplier 封装了可能抛出异常的操作的回调对象，不为 {@code null}
      * @param <R>      操作返回值的类型

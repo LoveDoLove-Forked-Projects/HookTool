@@ -83,21 +83,6 @@ public final class HookRegistry {
     }
 
     /**
-     * 从全局注册表中移除指定的 {@link AbsHook} 实例。
-     * <p>
-     * 移除后，该实例将不再出现在 {@link #getActiveHooks()} 的返回结果中，
-     * 但其仍可正常工作直至被 GC 回收。
-     * <p>
-     * 通常无需手动调用此方法，因为 {@link WeakHashMap} 会在实例被 GC 后自动清理。
-     * 此方法适用于需要在实例被回收前立即将其从注册表中移除的场景。
-     *
-     * @param hook 要移除的 {@link AbsHook} 实例，不为 {@code null}
-     */
-    static void unregister(@NonNull AbsHook hook) {
-        hooks.remove(hook);
-    }
-
-    /**
      * 获取当前所有活跃的 {@link AbsHook} 实例的快照。
      * <p>
      * 返回的 {@link Set} 是对当前注册表中所有未被 GC 回收的钩子实例的副本，
@@ -161,7 +146,8 @@ public final class HookRegistry {
      * <p>
      * 静态方法的 {@code thisObject} 始终为 {@code null}，在此阶段不会存储任何数据。
      * <p>
-     * 合并完成后注册表会被清空（因为热重载结束后旧注册表已废弃）。
+     * 注册表的清空由 {@link ModuleEntrance#onHotReloading} 在状态保存成功后统一调用
+     * {@link #clear()} 完成；若热更新被拒绝，注册表得以保留，旧钩子仍可被追踪。
      *
      * @param extras 热重载的附加信息，包含触发重载的上下文数据；可能为 {@code null}
      *               （当框架未传递额外数据时）
@@ -172,36 +158,52 @@ public final class HookRegistry {
      */
     @NonNull
     public static Map<String, Object> reloading(@Nullable Bundle extras) {
+        Object[] snapshot = hookSnapshot();
+
+        Map<String, Object> merged = new HashMap<>();
+
+        // Phase 1: 收集用户自定义状态（严格去重检测）
+        for (Object o : snapshot) {
+            AbsHook hook = (AbsHook) o;
+            // 为每个钩子单独创建 state map，传入钩子由其填写。
+            // 各钩子写入的 state 互不影响，合并时的碰撞检测由下方循环保证。
+            Map<String, Object> state = new HashMap<>();
+            hook.onHotReloading(extras, state);
+            for (Map.Entry<String, Object> entry : state.entrySet()) {
+                if (merged.containsKey(entry.getKey())) {
+                    throw new IllegalStateException(
+                        "Duplicate key found while merging hot reload state: " + entry.getKey());
+                }
+                merged.put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        // Phase 2: 自动保存 thisObject（以类名去重，同一类的多个方法共享一份）
+        // 使用 putIfAbsent 避免重复，因为同一类的多个方法具有相同的类级 key，
+        // 无需多次保存，第一次写入后后续的 putIfAbsent 不会覆盖。
+        // 静态方法的 thisObject 始终为 null，此处不会存储任何数据。
+        for (Object o : snapshot) {
+            AbsHook hook = (AbsHook) o;
+            if (hook.key != null && hook.thisObject != null) {
+                merged.putIfAbsent(hook.key, hook.thisObject);
+            }
+        }
+
+        return merged;
+    }
+
+    /**
+     * 获取当前所有活跃钩子的快照数组。
+     * <p>
+     * 在内部锁保护下将当前所有未被 GC 回收的 {@link AbsHook} 实例拷贝为数组。
+     * 调用方应在锁外遍历该数组执行用户回调，避免在持有锁时调用用户代码
+     * （这会使回调内注册新钩子触发并发修改异常）。
+     *
+     * @return 当前活跃钩子实例的快照数组；若没有活跃钩子则返回长度为 0 的数组
+     */
+    static Object[] hookSnapshot() {
         synchronized (hooks) {
-            Map<String, Object> merged = new HashMap<>();
-
-            // Phase 1: 收集用户自定义状态（严格去重检测）
-            for (AbsHook hook : hooks) {
-                // 为每个钩子单独创建 state map，传入钩子由其填写。
-                // 各钩子写入的 state 互不影响，合并时的碰撞检测由下方循环保证。
-                Map<String, Object> state = new HashMap<>();
-                hook.onHotReloading(extras, state);
-                for (Map.Entry<String, Object> entry : state.entrySet()) {
-                    if (merged.containsKey(entry.getKey())) {
-                        throw new IllegalStateException(
-                            "Duplicate key found while merging hot reload state: " + entry.getKey());
-                    }
-                    merged.put(entry.getKey(), entry.getValue());
-                }
-            }
-
-            // Phase 2: 自动保存 thisObject（以类名去重，同一类的多个方法共享一份）
-            // 使用 putIfAbsent 避免重复，因为同一类的多个方法具有相同的类级 key，
-            // 无需多次保存，第一次写入后后续的 putIfAbsent 不会覆盖。
-            // 静态方法的 thisObject 始终为 null，此处不会存储任何数据。
-            for (AbsHook hook : hooks) {
-                if (hook.key != null && hook.thisObject != null) {
-                    merged.putIfAbsent(hook.key, hook.thisObject);
-                }
-            }
-
-            hooks.clear();
-            return merged;
+            return hooks.toArray();
         }
     }
 
@@ -239,20 +241,20 @@ public final class HookRegistry {
      */
     public static void reloaded(@NonNull XposedModuleInterface.HotReloadedParam param) {
         Objects.requireNonNull(param);
-        synchronized (hooks) {
-            Map<String, Object> inState = (Map<String, Object>) param.getSavedInstanceState();
-            Objects.requireNonNull(inState);
+        Object[] snapshot = hookSnapshot();
+        Map<String, Object> inState = (Map<String, Object>) param.getSavedInstanceState();
+        Objects.requireNonNull(inState);
 
-            for (AbsHook hook : hooks) {
-                Object savedThisObject = (hook.key != null && !hook.isStatic)
-                    ? inState.get(hook.key) : null;
+        for (Object o : snapshot) {
+            AbsHook hook = (AbsHook) o;
+            Object savedThisObject = (hook.key != null && !hook.isStatic)
+                ? inState.get(hook.key) : null;
 
-                if (!hook.isStatic) {
-                    if (hook.thisObject != null) savedThisObject = hook.thisObject;
-                    else hook.thisObject = savedThisObject;
-                }
-                hook.onHotReloaded(savedThisObject, inState);
+            if (!hook.isStatic) {
+                if (hook.thisObject != null) savedThisObject = hook.thisObject;
+                else hook.thisObject = savedThisObject;
             }
+            hook.onHotReloaded(savedThisObject, inState);
         }
     }
 }

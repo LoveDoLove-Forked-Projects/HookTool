@@ -37,6 +37,7 @@ import java.lang.reflect.Field
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 
@@ -54,7 +55,9 @@ import java.util.concurrent.ConcurrentHashMap
  * 避免重复的反射查找开销。类型兼容性判断严格遵循 Apache Commons Lang 的规范，
  * 并完整支持 Java 8+ 接口 default 方法的深度查找。
  *
- * 本类为 `internal` 可见性，仅供 `tool` 模块内部使用，不属于对外公开的 API。
+ * 本类为公开 `object`，其方法通过 [@JvmStatic] 暴露，Java 侧可直接以
+ * `CoreHelper.xxx` 静态方式调用（见 [InvokeTool]）。该类的定位是工具库的内部实现核心，
+ * 对外公开 API 主要由 [com.hchen.hooktool.core.CoreTool] 提供。
  *
  * @author 焕晨HChen
  */
@@ -115,32 +118,38 @@ object CoreHelper {
 
     /**
      * 轻量级可选值包装器，用于在缓存中区分"从未查找"与"查找失败"两种状态。
-     *
+     * <p>
      * 与 `java.util.Optional` 不同，本实现允许将 `null` 作为有效值以外的"空"状态存储，
      * 以适配 [ConcurrentHashMap.computeIfAbsent] 的缓存语义。
+     * <p>
+     * 有效值以 [WeakReference] 持有，避免缓存条目强引用 [Class] 导致 `WeakHashMap`
+     * 弱键失效（反射成员持有其声明类的强引用）。空态（[empty]）不含任何引用。
      *
      * @param T 被包装值的类型。
-     * @property value 被包装的值，可为 `null`。
      */
-    private class Optional<T>(val value: T?) {
-        /**
-         * 判断当前包装器中是否存在有效值。
-         *
-         * @return 如果 [value] 不为 `null` 则返回 `true`。
-         */
-        fun isPresent(): Boolean = value != null
+    private class Optional<T>(value: T?) {
+        private val ref: WeakReference<T>? = value?.let { WeakReference(it) }
 
         /**
          * 获取有效值；若不存在，则抛出由 [lazyError] 提供的异常。
+         * <p>
+         * 若弱引用已被 GC 清除（返回 `null`），同样视为不存在并抛出。
          *
          * @param lazyError 生成异常的延迟工厂函数。
          * @return 包装的有效值。
-         * @throws Throwable 当 [value] 为 `null` 时，抛出由 [lazyError] 创建的异常。
+         * @throws Throwable 当弱引用被清除时抛出由 [lazyError] 创建的异常。
          */
         fun orElseThrow(lazyError: () -> Throwable): T {
-            if (value == null) throw lazyError()
+            val value = ref?.get() ?: throw lazyError()
             return value
         }
+
+        /**
+         * 获取有效值；若弱引用已被清除则返回 `null`。
+         *
+         * @return 包装的有效值；弱引用被 GC 清除时返回 `null`。
+         */
+        fun getOrNull(): T? = ref?.get()
 
         companion object {
             /** 全局共享的空 [Optional] 单例，避免重复创建空实例。 */
@@ -161,6 +170,59 @@ object CoreHelper {
              */
             @Suppress("UNCHECKED_CAST")
             fun <T> empty(): Optional<T> = EMPTY as Optional<T>
+        }
+    }
+
+    /**
+     * 缓存查找并处理弱引用自愈：返回 [key] 对应的缓存值，若弱引用已被 GC 清除则重新计算并原子更新缓存。
+     * <p>
+     * 与裸 [ConcurrentHashMap.computeIfAbsent] 不同，本方法在缓存条目的弱引用被清除后
+     * 不会直接返回 `null`，而是触发 [recompute] 重新解析并替换缓存，保证调用方始终拿到有效成员。
+     *
+     * @param map       目标缓存映射。
+     * @param key       缓存键。
+     * @param recompute 重新计算的工厂函数，参数为缓存键。
+     * @param error     缓存条目为空（查找失败）时生成异常的工厂函数。
+     * @return 解析出的有效成员；查找失败时抛出 [error] 生成的异常。
+     */
+    private fun <T> cachedOrRecompute(
+        map: ConcurrentHashMap<String, Optional<T>>,
+        key: String,
+        recompute: (String) -> Optional<T>,
+        error: () -> Throwable,
+    ): T {
+        while (true) {
+            val cached = map[key]
+            if (cached != null) {
+                val value = cached.getOrNull()
+                if (value != null) return value
+                // 弱引用已被 GC 清除，重新计算并原子替换
+                val fresh = recompute(key)
+                map.compute(key) { _, _ -> fresh }
+                val freshValue = fresh.getOrNull() ?: throw error()
+                return freshValue
+            }
+            // 首次查找：computeIfAbsent 原子插入
+            val computed = map.computeIfAbsent(key, recompute)
+            val value = computed.getOrNull()
+            if (value != null) return value
+            // computeIfAbsent 返回的条目弱引用恰好被清，此处直接抛错兜底；
+            // 循环仅保留单次迭代语义，避免并发路径下无谓重试。
+            val freshValue = computed.orElseThrow(error)
+            return freshValue
+        }
+    }
+
+    /**
+     * 生成方法/构造函数缓存签名：为每个参数类型附加其 ClassLoader 身份（[System.identityHashCode]），
+     * 避免不同 ClassLoader 加载的同名类型在缓存中碰撞；以逗号分隔防止边界粘连。
+     *
+     * @param parameterTypes 参数类型数组（元素可为 `null`，表示通配）。
+     * @return 用于缓存键的类型签名片段。
+     */
+    private fun typeSigKey(parameterTypes: Array<out Class<*>?>): String {
+        return parameterTypes.joinToString(",") {
+            it?.let { c -> "${c.name}@${System.identityHashCode(c.classLoader)}" } ?: "null"
         }
     }
 
@@ -213,13 +275,19 @@ object CoreHelper {
      * @throws NoSuchFieldException 在整个继承链和接口树中均未找到该字段时抛出。
      */
     private fun findFieldRecursiveImpl(clazz: Class<*>, fieldName: String): Field {
+        // 第一轮：沿继承链（当前类 → 父类）优先查找，与 XposedHelpers 语义一致
         var clz: Class<*>? = clazz
         while (clz != null && clz != Any::class.java) {
             try {
                 return clz.getDeclaredField(fieldName)
             } catch (_: NoSuchFieldException) {
             }
+            clz = clz.superclass
+        }
 
+        // 第二轮：继承链未找到时，遍历接口树查找接口常量（static 字段）
+        clz = clazz
+        while (clz != null && clz != Any::class.java) {
             for (iface in clz.interfaces) {
                 val f = findInterfaceFieldRecursive(iface, fieldName)
                 if (f != null) return f
@@ -480,8 +548,12 @@ object CoreHelper {
             return getObjectTransformationCost(srcType.componentType, destType.componentType!!) + 0.1f
         }
 
+        // 源类型为基本类型而目标为非基本类型时，先装箱再比较，与 Apache Commons Lang 一致
+        val effectiveSrc: Class<*>? =
+            if (srcType.isPrimitive && !destType.isPrimitive) getWrapperType(srcType) else srcType
+
         var cost = 0f
-        var src: Class<*>? = srcType
+        var src: Class<*>? = effectiveSrc
         while (src != null && src != destType) {
             if (destType.isInterface && destType.isAssignableFrom(src)) {
                 cost += getInterfaceDistance(src, destType)
@@ -599,7 +671,9 @@ object CoreHelper {
      */
     private fun collectInterfaceMethodsRecursive(iface: Class<*>, name: String, parameterTypes: Array<Class<*>?>, seen: HashSet<String>, result: MutableList<Method>) {
         for (method in iface.declaredMethods) {
-            if (Modifier.isStatic(method.modifiers) || Modifier.isPrivate(method.modifiers) || method.isBridge || method.isSynthetic) continue
+            if (Modifier.isStatic(method.modifiers) || Modifier.isPrivate(method.modifiers)
+                || Modifier.isAbstract(method.modifiers) || method.isBridge || method.isSynthetic
+            ) continue
             if (method.name == name && isAssignable(parameterTypes, method.parameterTypes)) {
                 val sig = method.name + method.parameterTypes.contentToString()
                 if (seen.add(sig)) {
@@ -697,7 +771,7 @@ object CoreHelper {
             try {
                 val primitive = PRIMITIVE_NAME_MAP[next]
                 if (primitive != null) return primitive
-                return Class.forName(toCanonicalName(next), false, classLoader)
+                return Class.forName(toCanonicalName(next), false, getSafeClassLoader(classLoader))
             } catch (_: ClassNotFoundException) {
                 lastDotIndex = next.lastIndexOf('.')
                 if (lastDotIndex != -1) {
@@ -740,15 +814,20 @@ object CoreHelper {
      */
     @JvmStatic
     fun findField(clazz: Class<*>, fieldName: String): Field {
-        return getFieldCacheMap(clazz).computeIfAbsent(fieldName) { k ->
-            try {
-                val field = findFieldRecursiveImpl(clazz, k)
-                field.isAccessible = true
-                Optional.of(field)
-            } catch (_: NoSuchFieldException) {
-                Optional.empty()
-            }
-        }.orElseThrow { NoSuchFieldError("${clazz.name}#$fieldName") }
+        return cachedOrRecompute(
+            getFieldCacheMap(clazz),
+            fieldName,
+            { k ->
+                try {
+                    val field = findFieldRecursiveImpl(clazz, k)
+                    field.isAccessible = true
+                    Optional.of(field)
+                } catch (_: NoSuchFieldException) {
+                    Optional.empty()
+                }
+            },
+            { NoSuchFieldError("${clazz.name}#$fieldName") }
+        )
     }
 
     /**
@@ -825,16 +904,21 @@ object CoreHelper {
      */
     @JvmStatic
     fun findMethodExactWithClasses(clazz: Class<*>, methodName: String, vararg parameterTypes: Class<*>): Method {
-        val sig = "$methodName#${parameterTypes.joinToString { it.name }}#exact"
-        return getMethodCacheMap(clazz).computeIfAbsent(sig) {
-            try {
-                val method = findMethodExactRecursive(clazz, methodName, arrayOf(*parameterTypes))
-                method.isAccessible = true
-                Optional.of(method)
-            } catch (_: NoSuchMethodException) {
-                Optional.empty()
-            }
-        }.orElseThrow { NoSuchMethodError("${clazz.name}#$methodName(${parameterTypes.joinToString { it.name }})") }
+        val sig = "$methodName#${typeSigKey(parameterTypes)}#exact"
+        return cachedOrRecompute(
+            getMethodCacheMap(clazz),
+            sig,
+            {
+                try {
+                    val method = findMethodExactRecursive(clazz, methodName, arrayOf(*parameterTypes))
+                    method.isAccessible = true
+                    Optional.of(method)
+                } catch (_: NoSuchMethodException) {
+                    Optional.empty()
+                }
+            },
+            { NoSuchMethodError("${clazz.name}#$methodName(${parameterTypes.joinToString { it.name }})") }
+        )
     }
 
     /**
@@ -886,7 +970,7 @@ object CoreHelper {
     private fun findInterfaceMethodExactRecursive(iface: Class<*>, name: String, parameterTypes: Array<Class<*>>): Method? {
         try {
             val m = iface.getDeclaredMethod(name, *parameterTypes)
-            if (!Modifier.isStatic(m.modifiers) && !Modifier.isPrivate(m.modifiers)) return m
+            if (!Modifier.isStatic(m.modifiers) && !Modifier.isPrivate(m.modifiers) && !Modifier.isAbstract(m.modifiers)) return m
         } catch (_: NoSuchMethodException) {
         }
         for (superIface in iface.interfaces) {
@@ -965,23 +1049,28 @@ object CoreHelper {
             }
         }
 
-        val sig = "$methodName#${parameterTypes.joinToString { it?.name ?: "null" }}#best"
-        return getMethodCacheMap(clazz).computeIfAbsent(sig) {
-            val candidates = mutableListOf<Method>()
-            collectMethodsBestMatch(clazz, methodName, arrayOf(*parameterTypes), candidates)
-            var bestMatch: Method? = null
-            for (method in candidates) {
-                if (bestMatch == null || compareFit(method.parameterTypes, bestMatch.parameterTypes, arrayOf(*parameterTypes)) < 0) {
-                    bestMatch = method
+        val sig = "$methodName#${typeSigKey(parameterTypes)}#best"
+        return cachedOrRecompute(
+            getMethodCacheMap(clazz),
+            sig,
+            {
+                val candidates = mutableListOf<Method>()
+                collectMethodsBestMatch(clazz, methodName, arrayOf(*parameterTypes), candidates)
+                var bestMatch: Method? = null
+                for (method in candidates) {
+                    if (bestMatch == null || compareFit(method.parameterTypes, bestMatch.parameterTypes, arrayOf(*parameterTypes)) < 0) {
+                        bestMatch = method
+                    }
                 }
-            }
-            if (bestMatch != null) {
-                bestMatch.isAccessible = true
-                Optional.of(bestMatch)
-            } else {
-                Optional.empty()
-            }
-        }.orElseThrow { NoSuchMethodError("${clazz.name}#$methodName(${parameterTypes.joinToString { it?.name ?: "null" }})") }
+                if (bestMatch != null) {
+                    bestMatch.isAccessible = true
+                    Optional.of(bestMatch)
+                } else {
+                    Optional.empty()
+                }
+            },
+            { NoSuchMethodError("${clazz.name}#$methodName(${parameterTypes.joinToString { it?.name ?: "null" }})") }
+        )
     }
 
     /**
@@ -1017,6 +1106,9 @@ object CoreHelper {
      */
     @JvmStatic
     fun findMethodBestMatchWithTypes(clazz: Class<*>, methodName: String, parameterTypes: Array<Class<*>?>, args: Array<out Any?>): Method {
+        require(parameterTypes.size == args.size) {
+            "parameterTypes size (${parameterTypes.size}) must match args size (${args.size})"
+        }
         val resolvedTypes: Array<Class<*>?> = Array(parameterTypes.size) { parameterTypes[it] }
         for (i in resolvedTypes.indices) {
             if (resolvedTypes[i] == null && args[i] != null) {
@@ -1078,16 +1170,21 @@ object CoreHelper {
      */
     @JvmStatic
     fun findConstructorExactWithClasses(clazz: Class<*>, vararg parameterTypes: Class<*>): Constructor<*> {
-        val sig = "${parameterTypes.joinToString { it.name }}#exact"
-        return getConstructorCacheMap(clazz).computeIfAbsent(sig) {
-            try {
-                val constructor = clazz.getDeclaredConstructor(*parameterTypes)
-                constructor.isAccessible = true
-                Optional.of(constructor)
-            } catch (_: NoSuchMethodException) {
-                Optional.empty()
-            }
-        }.orElseThrow { NoSuchMethodError("${clazz.name}<init>(${parameterTypes.joinToString { it.name }})") }
+        val sig = "${typeSigKey(parameterTypes)}#exact"
+        return cachedOrRecompute(
+            getConstructorCacheMap(clazz),
+            sig,
+            {
+                try {
+                    val constructor = clazz.getDeclaredConstructor(*parameterTypes)
+                    constructor.isAccessible = true
+                    Optional.of(constructor)
+                } catch (_: NoSuchMethodException) {
+                    Optional.empty()
+                }
+            },
+            { NoSuchMethodError("${clazz.name}<init>(${parameterTypes.joinToString { it.name }})") }
+        )
     }
 
     /**
@@ -1156,23 +1253,28 @@ object CoreHelper {
             }
         }
 
-        val sig = "${parameterTypes.joinToString { it?.name ?: "null" }}#best"
-        return getConstructorCacheMap(clazz).computeIfAbsent(sig) {
-            var bestMatch: Constructor<*>? = null
-            for (constructor in clazz.declaredConstructors) {
-                if (isAssignable(arrayOf(*parameterTypes), constructor.parameterTypes)) {
-                    if (bestMatch == null || compareFit(constructor.parameterTypes, bestMatch.parameterTypes, arrayOf(*parameterTypes)) < 0) {
-                        bestMatch = constructor
+        val sig = "${typeSigKey(parameterTypes)}#best"
+        return cachedOrRecompute(
+            getConstructorCacheMap(clazz),
+            sig,
+            {
+                var bestMatch: Constructor<*>? = null
+                for (constructor in clazz.declaredConstructors) {
+                    if (isAssignable(arrayOf(*parameterTypes), constructor.parameterTypes)) {
+                        if (bestMatch == null || compareFit(constructor.parameterTypes, bestMatch.parameterTypes, arrayOf(*parameterTypes)) < 0) {
+                            bestMatch = constructor
+                        }
                     }
                 }
-            }
-            if (bestMatch != null) {
-                bestMatch.isAccessible = true
-                Optional.of(bestMatch)
-            } else {
-                Optional.empty()
-            }
-        }.orElseThrow { NoSuchMethodError("${clazz.name}<init>(${parameterTypes.joinToString { it?.name ?: "null" }})") }
+                if (bestMatch != null) {
+                    bestMatch.isAccessible = true
+                    Optional.of(bestMatch)
+                } else {
+                    Optional.empty()
+                }
+            },
+            { NoSuchMethodError("${clazz.name}<init>(${parameterTypes.joinToString { it?.name ?: "null" }})") }
+        )
     }
 
     /**
@@ -1206,6 +1308,9 @@ object CoreHelper {
      */
     @JvmStatic
     fun findConstructorBestMatchWithTypes(clazz: Class<*>, parameterTypes: Array<Class<*>?>, args: Array<out Any?>): Constructor<*> {
+        require(parameterTypes.size == args.size) {
+            "parameterTypes size (${parameterTypes.size}) must match args size (${args.size})"
+        }
         val resolvedTypes: Array<Class<*>?> = Array(parameterTypes.size) { parameterTypes[it] }
         for (i in resolvedTypes.indices) {
             if (resolvedTypes[i] == null && args[i] != null) {
@@ -1234,6 +1339,10 @@ object CoreHelper {
     fun callMethod(obj: Any, methodName: String, vararg args: Any?): Any? {
         return try {
             val method = findMethodBestMatch(obj.javaClass, methodName, *args)
+            if (Modifier.isStatic(method.modifiers)) {
+                throw IllegalArgumentException(
+                    "Method $methodName is static, call with callStaticMethod instead.")
+            }
             method.invoke(obj, *args)
         } catch (e: IllegalAccessException) {
             throw IllegalAccessError(e.message)
@@ -1260,6 +1369,10 @@ object CoreHelper {
     fun callMethod(obj: Any, methodName: String, parameterTypes: Array<Class<*>?>, vararg args: Any?): Any? {
         return try {
             val method = findMethodBestMatch(obj.javaClass, methodName, *parameterTypes)
+            if (Modifier.isStatic(method.modifiers)) {
+                throw IllegalArgumentException(
+                    "Method $methodName is static, call with callStaticMethod instead.")
+            }
             method.invoke(obj, *args)
         } catch (e: IllegalAccessException) {
             throw IllegalAccessError(e.message)
@@ -1288,6 +1401,10 @@ object CoreHelper {
     fun callStaticMethod(clazz: Class<*>, methodName: String, vararg args: Any?): Any? {
         return try {
             val method = findMethodBestMatch(clazz, methodName, *args)
+            if (!Modifier.isStatic(method.modifiers)) {
+                throw IllegalArgumentException(
+                    "Method $methodName is not static, call with callMethod instead.")
+            }
             method.invoke(null, *args)
         } catch (e: IllegalAccessException) {
             throw IllegalAccessError(e.message)
@@ -1315,6 +1432,10 @@ object CoreHelper {
     fun callStaticMethod(clazz: Class<*>, methodName: String, parameterTypes: Array<Class<*>?>, vararg args: Any?): Any? {
         return try {
             val method = findMethodBestMatch(clazz, methodName, *parameterTypes)
+            if (!Modifier.isStatic(method.modifiers)) {
+                throw IllegalArgumentException(
+                    "Method $methodName is not static, call with callMethod instead.")
+            }
             method.invoke(null, *args)
         } catch (e: IllegalAccessException) {
             throw IllegalAccessError(e.message)

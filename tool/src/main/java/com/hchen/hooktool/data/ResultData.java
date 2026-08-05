@@ -25,7 +25,6 @@ import com.hchen.hooktool.callback.IDecomposer;
 import com.hchen.hooktool.core.CoreTool;
 
 import java.util.Objects;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -33,8 +32,8 @@ import java.util.function.Function;
  * <p>
  * 实际的计算逻辑在首次调用任意读取方法（{@link #get}、{@link #getOrDefault}、
  * {@link #getOrThrow} 等）时才被触发，之后的调用将直接返回已缓存的结果。
- * 整个计算过程通过 {@code synchronized} 机制保证线程安全，确保多线程并发场景下
- * 计算逻辑仅执行一次。
+ * 整个计算过程通过 {@code volatile} 标志 + 双重检查保证线程安全，确保多线程并发场景下
+ * 计算逻辑仅执行一次，已执行后的读取不再加锁。
  * <p>
  * 该类提供了丰富的结果操作模式，包括：成功/失败状态判断、默认值回退、
  * 异常对象获取，以及自定义异常处理等。
@@ -44,7 +43,7 @@ import java.util.function.Function;
  */
 public final class ResultData<R> {
     private final IDecomposer<R> decomposer;
-    private boolean isExecuted;
+    private volatile boolean isExecuted;
     private R result;
     private Throwable throwable;
 
@@ -74,9 +73,13 @@ public final class ResultData<R> {
 
     /**
      * 获取计算结果；若计算失败则返回指定的默认值。
+     * <p>
+     * 仅当计算<strong>失败</strong>（执行过程抛异常）时才返回 {@code def}；若计算成功但结果为
+     * {@code null}，仍返回 {@code null} 而非 {@code def}。需要严格区分"成功但 null"与"失败"时，
+     * 请组合使用 {@link #isSuccess()} + {@link #get()}（或 {@link #getThrowable()}）。
      *
      * @param def 计算失败时用作回退的默认值
-     * @return 计算成功时返回结果值，否则返回 {@code def} 参数值
+     * @return 计算成功时返回结果值（可能为 {@code null}），失败时返回 {@code def} 参数值
      */
     public R getOrDefault(R def) {
         runIfNeed();
@@ -98,20 +101,8 @@ public final class ResultData<R> {
             return result;
         }
         CoreTool.throwIt(throwable);
-        return null; // Not actually executed
-    }
-
-    /**
-     * 注册一个异常消费回调，仅在计算失败时被调用。
-     * <p>
-     * 若计算已成功完成，则该方法不执行任何操作。
-     *
-     * @param consumer 接收异常对象的回调函数，不可为 {@code null}
-     */
-    public void onThrow(@NonNull Consumer<Throwable> consumer) {
-        runIfNeed();
-        if (isSuccess()) return;
-        consumer.accept(throwable);
+        // throwIt 无条件抛出，此处不可达，仅用于满足编译器对方法必须有返回值的约束。
+        return null;
     }
 
     /**
@@ -152,22 +143,27 @@ public final class ResultData<R> {
     /**
      * 延迟执行计算逻辑的内部方法。若计算已执行则直接返回。
      * <p>
-     * 通过 {@code synchronized} 关键字保证线程安全，确保在多线程并发访问时
-     * 计算逻辑只被执行一次，结果（或异常）被安全地缓存。
+     * 通过 {@code volatile} 标志 + 双重检查（double-checked locking）保证线程安全：
+     * 已执行后直接返回不再加锁，仅在首次计算时短暂持有锁，避免多次读取时的锁竞争。
+     * 计算结果（或异常）被安全地缓存。
      */
-    private synchronized void runIfNeed() {
+    private void runIfNeed() {
         if (isExecuted) {
             return;
         }
-
-        try {
-            this.result = decomposer.get();
-            this.throwable = null;
-        } catch (Throwable throwable) {
-            this.result = null;
-            this.throwable = throwable;
-        } finally {
-            isExecuted = true;
+        synchronized (this) {
+            if (isExecuted) {
+                return;
+            }
+            try {
+                this.result = decomposer.get();
+                this.throwable = null;
+            } catch (Throwable throwable) {
+                this.result = null;
+                this.throwable = throwable;
+            } finally {
+                isExecuted = true;
+            }
         }
     }
 }

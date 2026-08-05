@@ -31,17 +31,16 @@ import android.os.Build;
 import android.os.UserHandle;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import com.hchen.hooktool.callback.IAppDataGetter;
 import com.hchen.hooktool.callback.IDecomposer;
-import com.hchen.hooktool.core.CoreTool;
 import com.hchen.hooktool.data.AppData;
 import com.hchen.hooktool.exception.UnexpectedException;
 import com.hchen.hooktool.helper.TryHelper;
+import com.hchen.hooktool.log.AndroidLog;
 
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * Android 应用包信息查询工具类。
@@ -53,7 +52,7 @@ import java.util.concurrent.Executors;
  *     <li>根据应用 uid 获取所属 user ID</li>
  *     <li>将多种包信息类型（{@link PackageInfo}、{@link ApplicationInfo}、{@link ResolveInfo} 等）
  *         统一转换为 {@link AppData} 数据结构</li>
- *     <li>支持同步与异步两种模式获取应用数据</li>
+ *     <li>同步获取应用数据（图标默认不加载，可按需显式开启）</li>
  * </ul>
  * <p>
  * 该类为纯工具类，所有方法均为静态方法，不允许实例化。
@@ -88,29 +87,32 @@ public final class PackageTool {
     /**
      * 判断指定包名的应用是否已被禁用。
      * <p>
-     * 通过 {@link PackageManager#getApplicationInfo(String, int)} 获取 {@link ApplicationInfo}
-     * 并检查其 {@link ApplicationInfo#enabled} 标志位。
+     * 基于 {@link PackageManager#getApplicationEnabledSetting(String)} 精确判断：
+     * {@link PackageManager#COMPONENT_ENABLED_STATE_DISABLED} 与
+     * {@link PackageManager#COMPONENT_ENABLED_STATE_DISABLED_USER} 均视为禁用；
+     * {@link PackageManager#COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED}（首次使用自动启用）不算禁用。
+     * 包未安装时返回 {@code false}，不抛出异常。
      *
      * @param context     上下文对象，不得为 {@code null}
      * @param packageName 待查询的应用包名
      * @return 已被禁用返回 {@code true}
-     * @throws RuntimeException 若包名对应的包不存在（{@link PackageManager.NameNotFoundException}）
      */
-    public static boolean isDisable(@NonNull Context context, @NonNull String packageName) {
+    public static boolean isDisabled(@NonNull Context context, @NonNull String packageName) {
         try {
-            ApplicationInfo result = context.getPackageManager().getApplicationInfo(packageName, 0);
-            return !result.enabled;
-        } catch (PackageManager.NameNotFoundException e) {
-            CoreTool.throwIt(e);
-            return false; // Not actually executed
+            int state = context.getPackageManager().getApplicationEnabledSetting(packageName);
+            return state == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                || state == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
+        } catch (IllegalArgumentException e) { // 包未安装
+            return false;
         }
     }
 
     /**
      * 根据应用的 uid 获取所属的 user ID。
      * <p>
-     * 内部通过反射调用 {@code UserHandle.getUserId(int)} 方法实现转换。
-     * 若调用失败，返回 -1。
+     * {@link UserHandle#getUserId(int)} 在 AOSP 中标注为 {@code @hide @UnsupportedAppUsage}
+     * 的隐藏 API，无法在公开 SDK 中直接调用，故此处通过反射绕过编译期检查；
+     * 运行期在 Xposed 等特权环境下可用。若调用失败，返回 -1。
      *
      * @param uid 应用的 uid
      * @return 对应的 user ID，获取失败时返回 -1
@@ -135,7 +137,7 @@ public final class PackageTool {
      * <p>
      * 满足以下任一条件即视为系统应用：
      * <ul>
-     *     <li>uid 小于 10000</li>
+     *     <li>uid 大于等于 0 且小于 10000（默认值 -1 不会误判为系统应用）</li>
      *     <li>flags 包含 {@link ApplicationInfo#FLAG_SYSTEM}</li>
      *     <li>flags 包含 {@link ApplicationInfo#FLAG_UPDATED_SYSTEM_APP}</li>
      * </ul>
@@ -144,17 +146,94 @@ public final class PackageTool {
      * @return 是系统应用返回 {@code true}
      */
     public static boolean isSystem(@NonNull ApplicationInfo app) {
-        if (app.uid < 10000) {
+        if (app.uid >= 0 && app.uid < 10000) {
             return true;
         }
         return (app.flags & (ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0;
     }
 
     /**
+     * 按包名判断应用是否为系统应用。
+     * <p>
+     * 内部通过 {@link PackageManager#getApplicationInfo(String, int)} 获取
+     * {@link ApplicationInfo} 后委托给 {@link #isSystem(ApplicationInfo)}。
+     * 包未安装时返回 {@code false}。
+     *
+     * @param context     上下文对象，不得为 {@code null}
+     * @param packageName 待查询的应用包名
+     * @return 是系统应用返回 {@code true}；包未安装返回 {@code false}
+     * @see #isSystem(ApplicationInfo)
+     */
+    public static boolean isSystem(@NonNull Context context, @NonNull String packageName) {
+        try {
+            return isSystem(context.getPackageManager().getApplicationInfo(packageName, 0));
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 通过包名获取应用的 uid。
+     * <p>
+     * 自动适配 API 33 及以上的 {@link PackageManager#getPackageUid(String, PackageManager.PackageInfoFlags)}。
+     * 包未安装时返回 -1。
+     *
+     * @param context     上下文对象，不得为 {@code null}
+     * @param packageName 待查询的应用包名
+     * @return 应用 uid；包未安装返回 -1
+     */
+    public static int getPackageUid(@NonNull Context context, @NonNull String packageName) {
+        try {
+            PackageManager pm = context.getPackageManager();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                return pm.getPackageUid(packageName, PackageManager.PackageInfoFlags.of(0));
+            }
+            return pm.getPackageUid(packageName, 0);
+        } catch (PackageManager.NameNotFoundException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * 获取应用的版本名（versionName），包未安装时返回 {@code null}。
+     *
+     * @param context     上下文对象，不得为 {@code null}
+     * @param packageName 待查询的应用包名
+     * @return 版本名字符串；包未安装返回 {@code null}
+     */
+    @Nullable
+    public static String getVersionName(@NonNull Context context, @NonNull String packageName) {
+        try {
+            return context.getPackageManager().getPackageInfo(packageName, 0).versionName;
+        } catch (PackageManager.NameNotFoundException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 获取应用的版本号（versionCode）。
+     * <p>
+     * 统一以 {@code long} 返回 {@link PackageInfo#getLongVersionCode()}，可承载超过 {@code int}
+     * 范围的版本号。包未安装时返回 -1。
+     *
+     * @param context     上下文对象，不得为 {@code null}
+     * @param packageName 待查询的应用包名
+     * @return 版本号；包未安装返回 -1
+     */
+    public static long getVersionCode(@NonNull Context context, @NonNull String packageName) {
+        try {
+            PackageInfo info = context.getPackageManager().getPackageInfo(packageName, 0);
+            return info.getLongVersionCode();
+        } catch (PackageManager.NameNotFoundException e) {
+            return -1;
+        }
+    }
+
+    /**
      * 通过自定义查询逻辑同步获取应用数据。
      * <p>
      * 此方法为 {@link #getAppData(Context, boolean, IAppDataGetter)} 的便捷重载，
-     * 默认使用同步模式（{@code async = false}）。
+     * 默认不加载图标（{@code loadIcon = false}）。
      *
      * @param context        上下文对象，不得为 {@code null}
      * @param iAppDataGetter 自定义的应用数据查询回调，不得为 {@code null}
@@ -166,149 +245,141 @@ public final class PackageTool {
     }
 
     /**
-     * 通过自定义查询逻辑获取应用数据，支持同步或异步模式。
+     * 通过自定义查询逻辑同步获取应用数据。
      * <p>
      * 泛型参数 {@code T} 支持以下类型：{@link PackageInfo}、{@link ResolveInfo}、{@link ActivityInfo}、
      * {@link ApplicationInfo}、{@link ProviderInfo}。
      * <p>
-     * <b>同步模式</b>（{@code async = false}）：在当前线程中执行查询并直接返回 {@link AppData} 数组。
-     * <p>
-     * <b>异步模式</b>（{@code async = true}）：在独立线程中执行查询，结果通过
-     * {@link IAppDataGetter#getAsyncAppData} 回调返回，本方法返回 {@code null}。
+     * 本方法在当前线程内同步执行查询与转换，并将结果直接返回。
+     * 查询失败（如 {@link PackageManager.NameNotFoundException}）时，捕获到的原始异常会原样
+     * 向上抛出（内部经 {@link TryHelper#doTry} 捕获、经
+     * {@link com.hchen.hooktool.data.ResultData#getOrThrow()} 重新抛出原始异常对象），
+     * 调用方可自行 try-catch 或交由模块全局异常处理器兜底。
      * <p>
      * 使用示例：
      * <pre>{@code
-     * // 同步模式
      * AppData[] appData = PackageTool.getAppData(context, false, new IAppDataGetter<PackageInfo>() {
      *      @Override
      *      @NonNull
      *      public List<PackageInfo> getPackages(@NonNull PackageManager pm) throws PackageManager.NameNotFoundException {
-     *          PackageInfo packageInfo = null;
-     *          ArrayList<PackageInfo> arrayList = new ArrayList<>();
-     *          arrayList.add(packageInfo);
-     *          return arrayList;
+     *          return pm.getInstalledPackages(0);
      *      }
      * });
-     *
-     * // 异步模式
-     * PackageTool.getAppData(context, true, new IAppDataGetter<PackageInfo>() {
-     *      @Override
-     *      @NonNull
-     *      public List<PackageInfo> getPackages(@NonNull PackageManager pm) throws PackageManager.NameNotFoundException {
-     *          PackageInfo packageInfo = null;
-     *          ArrayList<PackageInfo> arrayList = new ArrayList<>();
-     *          arrayList.add(packageInfo);
-     *          return arrayList;
-     *      }
-     *
-     *      @Override
-     *      public void getAsyncAppData(@NonNull AppData[] appData, @Nullable PackageManager.NameNotFoundException e) {
-     *          IAppDataGetter.super.getAsyncAppData(appData, e);
-     *      }
-     * });
-     * }
+     * }</pre>
      *
      * @param context        上下文对象，不得为 {@code null}
-     * @param async          是否使用异步模式
+     * @param loadIcon       是否加载应用图标；{@code true} 时填充 {@link AppData#icon}，
+     *                       {@code false}（默认）时 {@link AppData#icon} 为 {@code null}，可显著降低
+     *                       列表查询场景的内存与性能开销
      * @param iAppDataGetter 自定义的应用数据查询回调，不得为 {@code null}
      * @param <T>            包信息类型
-     * @return 同步模式下返回 {@link AppData} 数组；异步模式下返回 {@code null}
-     * @see #createAppData(PackageManager, Object)
+     * @return 查询并转换后的 {@link AppData} 数组，恒不为 {@code null}
+     * @throws PackageManager.NameNotFoundException 查询失败时以原始异常向上抛出
+     * @see #createAppData(PackageManager, Object, boolean)
      */
-    public static <T> AppData[] getAppData(@NonNull Context context, boolean async, @NonNull IAppDataGetter<T> iAppDataGetter) {
-        PackageManager packageManager = context.getPackageManager();
-        try {
-            if (async) {
-                ExecutorService service = null;
-                try {
-                    // noinspection resource
-                    service = Executors.newSingleThreadExecutor();
-                    service.execute(new Runnable() {
-                        @Override
-                        public void run() {
-                            try {
-                                List<T> ts = iAppDataGetter.getPackages(packageManager);
-                                AppData[] appDataArray = new AppData[ts.size()];
-                                for (int i = 0; i < ts.size(); i++) {
-                                    appDataArray[i] = createAppData(packageManager, ts.get(i));
-                                }
-                                iAppDataGetter.getAsyncAppData(appDataArray, null);
-                            } catch (PackageManager.NameNotFoundException e) {
-                                iAppDataGetter.getAsyncAppData(new AppData[]{}, e);
-                                CoreTool.throwIt(e);
-                            }
-                        }
-                    });
-                } finally {
-                    if (service != null) {
-                        service.shutdown();
-                    }
-                }
-                return null;
-            } else {
-                List<T> ts = iAppDataGetter.getPackages(packageManager);
-                AppData[] appDataArray = new AppData[ts.size()];
-                for (int i = 0; i < ts.size(); i++) {
-                    appDataArray[i] = createAppData(packageManager, ts.get(i));
-                }
-                return appDataArray;
+    public static <T> AppData[] getAppData(@NonNull Context context, boolean loadIcon,
+                                           @NonNull IAppDataGetter<T> iAppDataGetter) {
+        return TryHelper.doTry(() -> {
+            PackageManager packageManager = context.getPackageManager();
+            List<T> ts = iAppDataGetter.getPackages(packageManager);
+            AppData[] appDataArray = new AppData[ts.size()];
+            for (int i = 0; i < ts.size(); i++) {
+                appDataArray[i] = createAppData(packageManager, ts.get(i), loadIcon);
             }
-        } catch (PackageManager.NameNotFoundException e) {
-            CoreTool.throwIt(e);
-            return null; // Not actually executed
-        }
+            return appDataArray;
+        }).getOrThrow();
     }
 
     /**
      * 将包信息对象转换为统一的 {@link AppData} 数据结构。
      * <p>
+     * 此方法为 {@link #createAppData(PackageManager, Object, boolean)} 的便捷重载，
+     * 默认不加载图标（{@code loadIcon = false}），
+     * 转换后 {@link AppData#icon} 为 {@code null}。
+     * <p>
      * 支持的输入类型包括：{@link PackageInfo}、{@link ApplicationInfo}、{@link ResolveInfo}、
      * {@link ActivityInfo}、{@link ServiceInfo}、{@link ProviderInfo}。
      * <p>
-     * 转换过程中自动填充以下字段：应用图标、标签、包名、版本号、系统应用标记、启用状态及用户 ID。
+     * 转换过程中自动填充以下字段：包名、标签、系统应用标记、启用状态及用户 ID；
+     * 其中版本号、版本名及 {@link AppData#packageInfo} 仅当输入为 {@link PackageInfo}
+     * 类型时才被填充，其余输入类型下恒为 {@code null}。
      *
-     * @param pm  {@link PackageManager} 实例，用于加载应用图标和标签
-     * @param t   待转换的包信息对象
+     * @param pm {@link PackageManager} 实例，用于加载应用图标和标签
+     * @param t  待转换的包信息对象
      * @param <T> 包信息类型
      * @return 填充完毕的 {@link AppData} 实例
-     * @throws UnexpectedException 若传入的对象类型不受支持
+     * @throws IllegalArgumentException 若传入的对象类型不受支持
+     * @see #createAppData(PackageManager, Object, boolean)
      */
     @NonNull
     public static <T> AppData createAppData(@NonNull PackageManager pm, @NonNull T t) {
+        return createAppData(pm, t, false);
+    }
+
+    /**
+     * 将包信息对象转换为统一的 {@link AppData} 数据结构，可选是否加载图标。
+     * <p>
+     * 支持的输入类型包括：{@link PackageInfo}、{@link ApplicationInfo}、{@link ResolveInfo}、
+     * {@link ActivityInfo}、{@link ServiceInfo}、{@link ProviderInfo}。类型之外的对象
+     * 将抛出 {@link IllegalArgumentException}。
+     * <p>
+     * 转换过程中自动填充以下字段：包名、标签、系统应用标记、启用状态及用户 ID；
+     * 其中版本号、版本名及 {@link AppData#packageInfo} 仅当输入为 {@link PackageInfo}
+     * 类型时才被填充，其余输入类型下恒为 {@code null}。
+     * <p>
+     * {@link AppData#label} 在个别应用资源解析失败时会降级为 {@code null}，不会中断转换。
+     * <p>
+     * 注意：{@link AppData#isEnabled} 取自 {@link ApplicationInfo#enabled} 的静态清单标志，
+     * 不等价于 {@link #isDisabled(Context, String)} 的运行时启用设置状态。
+     *
+     * @param pm       {@link PackageManager} 实例，用于加载应用图标和标签
+     * @param t        待转换的包信息对象
+     * @param loadIcon 是否加载应用图标；{@code true} 时填充 {@link AppData#icon}，
+     *                 {@code false}（默认）时 {@link AppData#icon} 为 {@code null}
+     * @param <T>      包信息类型
+     * @return 填充完毕的 {@link AppData} 实例
+     * @throws IllegalArgumentException 若传入的对象类型不受支持
+     */
+    @NonNull
+    public static <T> AppData createAppData(@NonNull PackageManager pm, @NonNull T t, boolean loadIcon) {
         AppData appData = new AppData();
         PackageInfo packageInfo = null;
-        ApplicationInfo applicationInfo = null;
+        ApplicationInfo applicationInfo;
 
         // 根据不同类型的 T 对象获取 ApplicationInfo
+        // noinspection IfCanBeSwitch
         if (t instanceof PackageInfo info) {
             packageInfo = info;
             applicationInfo = info.applicationInfo;
             appData.versionName = info.versionName;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                appData.versionCode = Long.toString(info.getLongVersionCode());
-            } else {
-                appData.versionCode = Integer.toString(info.versionCode);
-            }
+            appData.versionCode = Long.toString(info.getLongVersionCode());
         } else if (t instanceof ApplicationInfo appInfo) {
             applicationInfo = appInfo;
         } else if (t instanceof ResolveInfo resolveInfo) {
             applicationInfo = aboutResolveInfo(resolveInfo).applicationInfo;
-        } else if (t instanceof ActivityInfo activityInfo) {
-            applicationInfo = activityInfo.applicationInfo;
-        } else if (t instanceof ServiceInfo serviceInfo) {
-            applicationInfo = serviceInfo.applicationInfo;
-        } else if (t instanceof ProviderInfo providerInfo) {
-            applicationInfo = providerInfo.applicationInfo;
+        } else if (t instanceof ComponentInfo componentInfo) {
+            // 统一覆盖 ActivityInfo、ServiceInfo、ProviderInfo 及其任何 ComponentInfo 子类
+            applicationInfo = componentInfo.applicationInfo;
         } else {
-            throw new UnexpectedException("Unknown type: " + t);
+            throw new IllegalArgumentException(
+                "Unsupported package info type: " + t.getClass().getName() +
+                    ". Supported types: PackageInfo, ApplicationInfo, ResolveInfo, " +
+                    "ActivityInfo, ServiceInfo, ProviderInfo."
+            );
         }
 
         // 填充应用数据
         if (applicationInfo != null) {
             appData.packageInfo = packageInfo;
             appData.applicationInfo = applicationInfo;
-            appData.icon = BitmapTool.drawableToBitmap(applicationInfo.loadIcon(pm));
-            appData.label = applicationInfo.loadLabel(pm).toString();
+            appData.icon = loadIcon ? BitmapTool.drawableToBitmap(applicationInfo.loadIcon(pm)) : null;
+            try {
+                appData.label = applicationInfo.loadLabel(pm).toString();
+            } catch (RuntimeException e) {
+                // 个别应用资源解析失败（如畸形 label），降级为 null，不中断整体列表转换
+                AndroidLog.logE(TAG, "Failed to load label for package: " + applicationInfo.packageName, e);
+                appData.label = null;
+            }
             appData.packageName = applicationInfo.packageName;
             appData.isSystemApp = isSystem(applicationInfo);
             appData.isEnabled = applicationInfo.enabled;

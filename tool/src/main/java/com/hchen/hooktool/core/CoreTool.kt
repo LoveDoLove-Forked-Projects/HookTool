@@ -87,6 +87,19 @@ import java.util.Objects
  * - **SharedPreferences 访问**：[prefs]
  * - **辅助工具**：[getStackTrace]、[timeConsumption]、[getParameterTypes]
  *
+ * ### Kotlin / Java 互操作说明
+ * - **接收者不可为 null**：本类扩展函数经 `@JvmStatic` 合成，接收者（类名 / [Class] / 实例等）
+ *   编译为第一参数并带非空约束，Java 传入 `null` 接收者会触发入口空指针校验。
+ * - **vararg 空元素表达**：`vararg` 参数在 JVM 层为 `Object[]`，Java 传单个 `null` 会把整个数组
+ *   置为 `null` 并立即触发空指针校验。注意：`null` 元素在精确匹配系列（含 [getParameterTypes]）
+ *   <strong>不被接受</strong>；需以 `null` 表示通配匹配时，请使用 best-match 系列方法。
+ * - **便捷两参形态**：`@JvmOverloads` 为带默认参数的扩展函数生成了省略版重载，例如
+ *   `CoreTool.callMethod(obj, "foo")` 无需传空参数数组即可编译。
+ * - **`ClassLoader` 参数位序**：带 `classLoader` 参数的扩展函数，Java 调用时 `ClassLoader`
+ *   位于接收者之后的第二参数位置（如 `CoreTool.findMethod("a.b.C", null, "m")`）。
+ * - **`IfExists` 对称家族**：`findXxx` / `findXxxIfExists`、`hookXxx` / `hookXxxIfExists`
+ *   成对存在，前者失败抛异常，后者失败返回 `null`，按需选用。
+ *
  * @author 焕晨HChen
  * @see AbsModule
  * @see CoreHelper
@@ -254,6 +267,18 @@ open class CoreTool : XposedLog() {
 
         /**
          * 在当前 [Class] 中精确查找与给定名称及参数签名匹配的方法，并将其设为可访问。
+         *
+         * 使用示例：
+         * ```
+         * // Kotlin
+         * SomeClass::class.java.findMethod("foo", String::class.java)
+         * // Java
+         * CoreTool.findMethod(SomeClass.class, "foo", String.class);
+         * ```
+         * 参数类型序列 `parameterTypes` 的每个元素为 [String]（类名）或 [Class]。
+         * 注意：本方法为<strong>精确匹配</strong>，不支持以 `null` 元素表示"通配"——
+         * `null` 元素会被判定为非法并抛出异常；需要通配匹配时请改用 best-match 系列方法
+         * （如 {@code findMethodBestMatch}）。
          *
          * @param methodName 待查找的方法名称。
          * @param parameterTypes 方法的参数类型序列。
@@ -609,6 +634,23 @@ open class CoreTool : XposedLog() {
         /**
          * 通过反射在当前对象上调用指定名称的实例方法。
          *
+         * 使用示例：
+         * ```
+         * // Kotlin：无参 / 有参
+         * obj.callMethod("foo")
+         * obj.callMethod("foo", arrayOf(String::class.java), "bar")
+         *
+         * // Kotlin：参数含 null 元素（必须用 arrayOf(null) 包裹）
+         * obj.callMethod("foo", arrayOf(null))
+         *
+         * // Java：传 null 元素必须 new Object[]{null}；整个数组置 null 会抛 NPE
+         * CoreTool.callMethod(obj, "foo", new Object[]{null});
+         * ```
+         *
+         * 重载辨析：本方法（接收者 [Any]）与 `Method.callMethod`（接收者 [Method]）并存。
+         * Java 调用 `CoreTool.callMethod(x, "m", ...)` 时，若第二参数是 [String] 字面量则稳定选中
+         * 本方法；若是 [Object] 类型变量则可能选中 `Method.callMethod`，二者按反射语义均正确。
+         *
          * @param methodName 待调用的方法名称。
          * @param parameterTypes 方法的参数类型数组，默认为空数组时由框架自动推断。
          * @param args 传递给方法的实际参数。
@@ -630,6 +672,9 @@ open class CoreTool : XposedLog() {
 
         /**
          * 尝试通过反射在当前对象上调用指定名称的实例方法，若方法不存在则返回 `null`。
+         * <p>
+         * 未显式提供参数类型时，按实际参数值推断目标方法（与 {@code callMethod} 的空参
+         * 语义一致），而非零参精确匹配——避免误将「存在待匹配的有参方法」判定为不存在。
          *
          * @param methodName 待调用的方法名称。
          * @param parameterTypes 方法的参数类型数组，默认为空数组时由框架自动推断。
@@ -644,7 +689,7 @@ open class CoreTool : XposedLog() {
             vararg args: Any?
         ): Any? {
             val method = if (parameterTypes.isEmpty()) {
-                this.javaClass.findMethodIfExists(methodName)
+                CoreHelper.findMethodBestMatch(this.javaClass, methodName, *args)
             } else {
                 this.javaClass.findMethodIfExists(methodName, *parameterTypes)
             } ?: return null
@@ -826,6 +871,19 @@ open class CoreTool : XposedLog() {
         /**
          * 使用当前 [Class] 创建该类的新实例。
          *
+         * 使用示例：
+         * ```
+         * // Kotlin：无参 / 有参
+         * SomeClass::class.java.newInstance()
+         * SomeClass::class.java.newInstance("bar")
+         *
+         * // Kotlin：参数含 null 元素（必须用 arrayOf(null) 包裹）
+         * SomeClass::class.java.newInstance(arrayOf(null))
+         *
+         * // Java：传 null 元素必须 new Object[]{null}；整个数组置 null 会抛 NPE
+         * CoreTool.newInstance(SomeClass.class, new Object[]{null});
+         * ```
+         *
          * @param parameterTypes 构造函数的参数类型数组，默认为空数组时由框架自动推断。
          * @param args 传递给构造函数的实际参数。
          * @return 创建成功的新实例对象。
@@ -879,6 +937,19 @@ open class CoreTool : XposedLog() {
 
         /**
          * 调用当前 [Class] 上的静态方法。
+         *
+         * 使用示例：
+         * ```
+         * // Kotlin：无参 / 有参
+         * SomeClass::class.java.callStaticMethod("foo")
+         * SomeClass::class.java.callStaticMethod("foo", "bar")
+         *
+         * // Kotlin：参数含 null 元素（必须用 arrayOf(null) 包裹）
+         * SomeClass::class.java.callStaticMethod("foo", arrayOf(null))
+         *
+         * // Java：传 null 元素必须 new Object[]{null}；整个数组置 null 会抛 NPE
+         * CoreTool.callStaticMethod(SomeClass.class, "foo", new Object[]{null});
+         * ```
          *
          * @param methodName 待调用的静态方法名称。
          * @param parameterTypes 方法的参数类型数组，默认为空数组时由框架自动推断。
@@ -2035,10 +2106,17 @@ open class CoreTool : XposedLog() {
         /**
          * 将混合类型（类名字符串或 [Class] 对象）的参数类型声明统一转换为 [Class] 数组。
          *
+         * 参数类型序列 `parameterTypes` 的每个元素为 [String]（类名）或 [Class]。
+         * 注意：此方法<strong>不支持</strong> `null` 元素表示"通配"——`null` 元素会被立即判定为
+         * 非法并抛出 [NullPointerException]。需要以 `null` 表示通配匹配时，请改用
+         * best-match 系列方法（如 {@code findMethodBestMatch}）。
+         *
          * @param classLoader 用以加载目标类的 [ClassLoader]。
          * @param parameterTypes 可包含 [String]（类名）或 [Class] 对象的参数类型列表。
          * @return 转换后的 [Class] 数组。
-         * @throws UnexpectedException 当参数类型既非 [String] 也非 [Class] 时抛出。
+         * @throws IllegalArgumentException 当参数类型既非 [String] 也非 [Class] 时抛出。
+         * @throws NullPointerException 当 `parameterTypes` 数组中存在 `null` 元素时抛出。
+         * @throws NoClassDefFoundError 当某个 [String] 类名无法解析为有效的类时抛出。
          */
         @JvmStatic
         fun getParameterTypes(
@@ -2058,7 +2136,7 @@ open class CoreTool : XposedLog() {
                     }
 
                     else -> {
-                        throw UnexpectedException("Unknown parameter types.")
+                        throw IllegalArgumentException("Unknown parameter types: ${any.javaClass.name}")
                     }
                 }
             }
@@ -2070,7 +2148,9 @@ open class CoreTool : XposedLog() {
          *
          * @param parameterTypes 可包含 [String]（类名）或 [Class] 对象的参数类型列表。
          * @return 转换后的 [Class] 数组。
-         * @throws UnexpectedException 当参数类型既非 [String] 也非 [Class] 时抛出。
+         * @throws IllegalArgumentException 当参数类型既非 [String] 也非 [Class] 时抛出。
+         * @throws NullPointerException 当 `parameterTypes` 数组中存在 `null` 元素时抛出。
+         * @throws NoClassDefFoundError 当某个 [String] 类名无法解析为有效的类时抛出。
          */
         @JvmStatic
         fun getParameterTypes(

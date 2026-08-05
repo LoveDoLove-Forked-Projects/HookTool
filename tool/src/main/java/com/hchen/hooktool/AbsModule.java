@@ -193,8 +193,6 @@ public abstract class AbsModule extends CoreTool {
 
     /**
      * 当外部注入自定义 {@link ClassLoader} 时触发的回调。
-     * <p>
-     * 注意：此方法不受 {@link #isEnabled()} 守卫控制，调用方需自行管理使用场景。
      *
      * @param classLoader 由外部注入的目标应用类加载器
      */
@@ -230,7 +228,6 @@ public abstract class AbsModule extends CoreTool {
      * <p>
      * 执行流程如下：
      * <ol>
-     *   <li>记录生命周期阶段进入日志（DEBUG 级别）</li>
      *   <li>通过 {@link #isEnabled()} 检查模块是否启用</li>
      *   <li>对参数执行非空校验</li>
      *   <li>执行指定的回调动作</li>
@@ -244,18 +241,19 @@ public abstract class AbsModule extends CoreTool {
      */
     private <T> void dispatch(@NonNull StageEnum stage, @NonNull T param, @NonNull Consumer<T> action) {
         try {
-            XposedLog.logD(TAG, "==> " + stage.name());
             if (!isEnabled()) {
-                XposedLog.logD(TAG, "<== " + stage.name() + " (disabled)");
                 return;
             }
 
             Objects.requireNonNull(param);
             action.accept(param);
-            XposedLog.logD(TAG, "<== " + stage.name() + " (done)");
         } catch (Throwable e) {
-            XposedLog.logD(TAG, "<== " + stage.name() + " (exception)");
-            onThrow(stage, e);
+            try {
+                onThrow(stage, e);
+            } catch (Throwable onThrowError) {
+                // onThrow 覆写抛出的异常被记录并忽略，确保原始异常继续传播，不覆盖异常链
+                XposedLog.logW(TAG, "onThrow() threw an exception, ignored to preserve the original exception.", onThrowError);
+            }
             CoreTool.throwIt(e);
         }
     }
@@ -269,7 +267,7 @@ public abstract class AbsModule extends CoreTool {
      * @param param Xposed 框架传入的模块加载参数
      */
     final public void handleModuleLoaded(@NonNull XposedModuleInterface.ModuleLoadedParam param) {
-        dispatch(StageEnum.MODULE_LOADED, param, p -> onModuleLoaded(p));
+        dispatch(StageEnum.MODULE_LOADED, param, this::onModuleLoaded);
     }
 
     /**
@@ -281,7 +279,7 @@ public abstract class AbsModule extends CoreTool {
      * @param param Xposed 框架传入的包加载参数
      */
     final public void handlePackageLoaded(@NonNull XposedModuleInterface.PackageLoadedParam param) {
-        dispatch(StageEnum.PACKAGE_LOADED, param, p -> onPackageLoaded(p));
+        dispatch(StageEnum.PACKAGE_LOADED, param, this::onPackageLoaded);
     }
 
     /**
@@ -293,7 +291,7 @@ public abstract class AbsModule extends CoreTool {
      * @param param Xposed 框架传入的包就绪参数
      */
     final public void handlePackageReady(@NonNull XposedModuleInterface.PackageReadyParam param) {
-        dispatch(StageEnum.PACKAGE_READY, param, p -> onPackageReady(p));
+        dispatch(StageEnum.PACKAGE_READY, param, this::onPackageReady);
     }
 
     /**
@@ -305,7 +303,7 @@ public abstract class AbsModule extends CoreTool {
      * @param param Xposed 框架传入的系统服务器启动参数
      */
     final public void handleSystemServerStarting(@NonNull XposedModuleInterface.SystemServerStartingParam param) {
-        dispatch(StageEnum.SYSTEM_SERVER_STARTING, param, p -> onSystemServerStarting(p));
+        dispatch(StageEnum.SYSTEM_SERVER_STARTING, param, this::onSystemServerStarting);
     }
 
     /**
@@ -317,7 +315,7 @@ public abstract class AbsModule extends CoreTool {
      * @param classLoader 由外部注入的目标应用类加载器
      */
     final public void handleClassLoader(@NonNull ClassLoader classLoader) {
-        dispatch(StageEnum.ON_CLASSLOADER, classLoader, cl -> onClassLoader(cl));
+        dispatch(StageEnum.ON_CLASSLOADER, classLoader, this::onClassLoader);
     }
 
     /**
@@ -329,7 +327,7 @@ public abstract class AbsModule extends CoreTool {
      * @param context 目标应用的上下文对象
      */
     final public void handleApplicationCreated(@NonNull Context context) {
-        dispatch(StageEnum.ON_APPLICATION_CREATED, context, ctx -> onApplicationCreated(ctx));
+        dispatch(StageEnum.ON_APPLICATION_CREATED, context, this::onApplicationCreated);
     }
 
     /**
@@ -346,18 +344,18 @@ public abstract class AbsModule extends CoreTool {
      * @return 当前实例返回的状态数据；若被禁用或被跳过则返回空 {@link HashMap}
      */
     @NonNull final public Map<String, Object> handleHotReloading(@Nullable Bundle extras) {
-        XposedLog.logD(TAG, "==> HOT_RELOADING");
         if (!isEnabled()) {
-            XposedLog.logD(TAG, "<== HOT_RELOADING (disabled)");
             return new HashMap<>();
         }
         try {
-            Map<String, Object> result = onHotReloading(extras);
-            XposedLog.logD(TAG, "<== HOT_RELOADING (done)");
-            return result;
+            return onHotReloading(extras);
         } catch (Throwable e) {
-            XposedLog.logD(TAG, "<== HOT_RELOADING (exception)");
-            onThrow(StageEnum.HOT_RELOADING, e);
+            try {
+                onThrow(StageEnum.HOT_RELOADING, e);
+            } catch (Throwable onThrowError) {
+                // onThrow 覆写抛出的异常被记录并忽略，确保原始异常继续传播，不覆盖异常链
+                XposedLog.logW(TAG, "onThrow() threw an exception, ignored to preserve the original exception.", onThrowError);
+            }
             CoreTool.throwIt(e);
             return new HashMap<>();
         }
@@ -372,6 +370,6 @@ public abstract class AbsModule extends CoreTool {
      * @param param 热更新完成参数
      */
     final public void handleHotReloaded(@NonNull XposedModuleInterface.HotReloadedParam param) {
-        dispatch(StageEnum.HOT_RELOADED, param, p -> onHotReloaded(p));
+        dispatch(StageEnum.HOT_RELOADED, param, this::onHotReloaded);
     }
 }

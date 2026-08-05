@@ -145,7 +145,8 @@ public final class ModuleConfig {
      * @param logExpandPaths 需要扫描的包路径数组，支持可变参数
      */
     public static void setLogExpandPaths(@NonNull String... logExpandPaths) {
-        ModuleConfig.logExpandPaths = logExpandPaths;
+        // 防御性拷贝：避免外部数组元素修改穿透 volatile 字段（元素 String 不可变，浅拷贝足够）
+        ModuleConfig.logExpandPaths = logExpandPaths.clone();
     }
 
     /**
@@ -156,7 +157,8 @@ public final class ModuleConfig {
      * @param logExpandIgnoreClassNames 需要忽略的完整类名数组，支持可变参数
      */
     public static void setLogExpandIgnoreClassNames(@NonNull String... logExpandIgnoreClassNames) {
-        ModuleConfig.logExpandIgnoreClassNames = logExpandIgnoreClassNames;
+        // 防御性拷贝：避免外部数组元素修改穿透 volatile 字段（元素 String 不可变，浅拷贝足够）
+        ModuleConfig.logExpandIgnoreClassNames = logExpandIgnoreClassNames.clone();
     }
 
     /**

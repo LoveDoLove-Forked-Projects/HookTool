@@ -23,6 +23,8 @@ import android.util.Log;
 import com.hchen.hooktool.ModuleConfig;
 import com.hchen.hooktool.ModuleData;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 /**
  * Xposed 运行时环境专用日志输出工具类。
  * <p>
@@ -30,15 +32,21 @@ import com.hchen.hooktool.ModuleData;
  * 本类通过 {@link ModuleData#getWrapper()} 获取 Xposed 运行时的日志代理接口进行输出，
  * 确保日志能够正确地出现在 Xposed 宿主环境（如 LSPosed 管理器）的日志面板中。
  * <p>
- * 支持四个日志优先级：ERROR（{@code E}）、WARN（{@code W}）、INFO（{@code I}）和 DEBUG（{@code D}），
- * 每个优先级均提供纯文本、附带调用栈字符串、附带异常对象及两者兼具等多种重载形式。
- * 所有输出均受 {@link ModuleConfig#getLogLevel()} 全局日志等级控制。
+ * 输出逻辑复用 {@link AbstractLog} 的等级门控与消息格式化。当当前环境不满足
+ * Xposed 输出条件（未处于 Xposed 环境，或获取日志代理失败）时，自动回落至
+ * {@link AndroidLog} 输出，避免崩溃与日志静默丢失。
  *
  * @author 焕晨HChen
+ * @see AbstractLog
  * @see AndroidLog
  * @see ModuleData#getWrapper()
  */
-public class XposedLog {
+public class XposedLog extends AbstractLog {
+    /** 本类输出目标单例，供静态门面委托。 */
+    private static final AbstractLog IMPL = new XposedLog();
+    /** 标记是否已发生回落，保证回落提示仅输出一次。 */
+    private static final AtomicBoolean fallbackUsed = new AtomicBoolean(false);
+
     protected XposedLog() {
     }
 
@@ -53,8 +61,7 @@ public class XposedLog {
      * @param log 待输出的日志正文
      */
     public static void logE(String tag, String log) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_E) return;
-        ModuleData.getWrapper().log(Log.ERROR, tag, "[E]: " + log);
+        logAt(IMPL, ModuleConfig.LOG_E, tag, log, null, null);
     }
 
     /**
@@ -64,8 +71,7 @@ public class XposedLog {
      * @param e   待记录的异常实例
      */
     public static void logE(String tag, Throwable e) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_E) return;
-        ModuleData.getWrapper().log(Log.ERROR, tag, "[E]: ", e);
+        logAt(IMPL, ModuleConfig.LOG_E, tag, null, null, e);
     }
 
     /**
@@ -76,8 +82,7 @@ public class XposedLog {
      * @param stackTrace 以字符串形式提供的调用栈信息，将追加到消息末尾
      */
     public static void logE(String tag, String log, String stackTrace) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_E) return;
-        ModuleData.getWrapper().log(Log.ERROR, tag, "[E]: " + log + "\n[Stack Info]: " + stackTrace);
+        logAt(IMPL, ModuleConfig.LOG_E, tag, log, stackTrace, null);
     }
 
     /**
@@ -88,8 +93,7 @@ public class XposedLog {
      * @param e   待记录的异常实例
      */
     public static void logE(String tag, String log, Throwable e) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_E) return;
-        ModuleData.getWrapper().log(Log.ERROR, tag, "[E]: " + log, e);
+        logAt(IMPL, ModuleConfig.LOG_E, tag, log, null, e);
     }
 
     // ----------- logW --------------
@@ -103,8 +107,7 @@ public class XposedLog {
      * @param log 待输出的日志正文
      */
     public static void logW(String tag, String log) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_W) return;
-        ModuleData.getWrapper().log(Log.WARN, tag, "[W]: " + log);
+        logAt(IMPL, ModuleConfig.LOG_W, tag, log, null, null);
     }
 
     /**
@@ -114,8 +117,7 @@ public class XposedLog {
      * @param e   待记录的异常实例
      */
     public static void logW(String tag, Throwable e) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_W) return;
-        ModuleData.getWrapper().log(Log.WARN, tag, "[W]: ", e);
+        logAt(IMPL, ModuleConfig.LOG_W, tag, null, null, e);
     }
 
     /**
@@ -126,8 +128,7 @@ public class XposedLog {
      * @param stackTrace 以字符串形式提供的调用栈信息
      */
     public static void logW(String tag, String log, String stackTrace) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_W) return;
-        ModuleData.getWrapper().log(Log.WARN, tag, "[W]: " + log + "\n[Stack Info]: " + stackTrace);
+        logAt(IMPL, ModuleConfig.LOG_W, tag, log, stackTrace, null);
     }
 
     /**
@@ -138,8 +139,7 @@ public class XposedLog {
      * @param e   待记录的异常实例
      */
     public static void logW(String tag, String log, Throwable e) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_W) return;
-        ModuleData.getWrapper().log(Log.WARN, tag, "[W]: " + log, e);
+        logAt(IMPL, ModuleConfig.LOG_W, tag, log, null, e);
     }
 
     // ----------- logI --------------
@@ -153,8 +153,7 @@ public class XposedLog {
      * @param log 待输出的日志正文
      */
     public static void logI(String tag, String log) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_I) return;
-        ModuleData.getWrapper().log(Log.INFO, tag, "[I]: " + log);
+        logAt(IMPL, ModuleConfig.LOG_I, tag, log, null, null);
     }
 
     /**
@@ -165,8 +164,7 @@ public class XposedLog {
      * @param stackTrace 以字符串形式提供的调用栈信息
      */
     public static void logI(String tag, String log, String stackTrace) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_I) return;
-        ModuleData.getWrapper().log(Log.INFO, tag, "[I]: " + log + "\n[Stack Info]: " + stackTrace);
+        logAt(IMPL, ModuleConfig.LOG_I, tag, log, stackTrace, null);
     }
 
     /**
@@ -176,8 +174,7 @@ public class XposedLog {
      * @param e   待记录的异常实例
      */
     public static void logI(String tag, Throwable e) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_I) return;
-        ModuleData.getWrapper().log(Log.INFO, tag, "[I]: ", e);
+        logAt(IMPL, ModuleConfig.LOG_I, tag, null, null, e);
     }
 
     /**
@@ -188,8 +185,7 @@ public class XposedLog {
      * @param e   待记录的异常实例
      */
     public static void logI(String tag, String log, Throwable e) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_I) return;
-        ModuleData.getWrapper().log(Log.INFO, tag, "[I]: " + log, e);
+        logAt(IMPL, ModuleConfig.LOG_I, tag, log, null, e);
     }
 
     // ------------ logD --------------
@@ -203,8 +199,7 @@ public class XposedLog {
      * @param log 待输出的日志正文
      */
     public static void logD(String tag, String log) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_D) return;
-        ModuleData.getWrapper().log(Log.DEBUG, tag, "[D]: " + log);
+        logAt(IMPL, ModuleConfig.LOG_D, tag, log, null, null);
     }
 
     /**
@@ -214,8 +209,7 @@ public class XposedLog {
      * @param e   待记录的异常实例
      */
     public static void logD(String tag, Throwable e) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_D) return;
-        ModuleData.getWrapper().log(Log.DEBUG, tag, "[D]: ", e);
+        logAt(IMPL, ModuleConfig.LOG_D, tag, null, null, e);
     }
 
     /**
@@ -226,8 +220,7 @@ public class XposedLog {
      * @param stackTrace 以字符串形式提供的调用栈信息
      */
     public static void logD(String tag, String log, String stackTrace) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_D) return;
-        ModuleData.getWrapper().log(Log.DEBUG, tag, "[D]: " + log + "\n[Stack Info]: " + stackTrace);
+        logAt(IMPL, ModuleConfig.LOG_D, tag, log, stackTrace, null);
     }
 
     /**
@@ -238,7 +231,39 @@ public class XposedLog {
      * @param e   待记录的异常实例
      */
     public static void logD(String tag, String log, Throwable e) {
-        if (ModuleConfig.getLogLevel() < ModuleConfig.LOG_D) return;
-        ModuleData.getWrapper().log(Log.DEBUG, tag, "[D]: " + log, e);
+        logAt(IMPL, ModuleConfig.LOG_D, tag, log, null, e);
+    }
+
+    /**
+     * 抽象输出点：优先通过 Xposed 运行时日志代理输出；失败或环境不满足时回落 {@link AndroidLog}。
+     * <p>
+     * 回落保留调用者 {@code tag} 语义（经 {@link AndroidLog#output} 以 {@code [tag]} 嵌入消息）。
+     * 首次回落会通过原生 {@link android.util.Log} 打印一次提示（不经 Xposed 路径，避免递归），
+     * 之后常驻回落避免重复异常构造。
+     */
+    @Override
+    protected void log(int priority, String tag, String message, Throwable throwable) {
+        if (fallbackUsed.get() || !ModuleData.isXposedEnvironment()) {
+            AndroidLog.output(priority, tag, message, throwable);
+            return;
+        }
+        try {
+            ModuleData.getWrapper().log(priority, tag, message, throwable);
+        } catch (Throwable t) {
+            markFallback(t);
+            AndroidLog.output(priority, tag, message, throwable);
+        }
+    }
+
+    /**
+     * 记录回落状态并输出一次性提示。
+     *
+     * @param t 导致回落的异常
+     */
+    private static void markFallback(Throwable t) {
+        if (fallbackUsed.compareAndSet(false, true)) {
+            Log.w(ModuleConfig.getLogTag(),
+                "[XposedLog] Falling back to AndroidLog: " + t);
+        }
     }
 }

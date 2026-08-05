@@ -28,6 +28,8 @@ import android.util.Base64;
 
 import androidx.annotation.NonNull;
 
+import com.hchen.hooktool.log.AndroidLog;
+
 import org.json.JSONObject;
 
 import java.util.HashMap;
@@ -77,7 +79,8 @@ public final class ModuleState {
             }
             if (result == null) return false;
             return result.getBoolean("active", false);
-        } catch (PackageManager.NameNotFoundException ignore) {
+        } catch (PackageManager.NameNotFoundException | SecurityException ignore) {
+            // Android 11+ 无包可见性时 getPackageInfo 抛 SecurityException，同样视为非太极环境
             return false;
         }
     }
@@ -122,6 +125,8 @@ public final class ModuleState {
             configMap.put("versionCode", versionCode);
             return configMap;
         } catch (Throwable e) {
+            // 解析失败（Base64/JSON 异常、缺字段等），记录日志便于排查 LSPatch 配置损坏场景
+            AndroidLog.logW("ModuleState", "LSPatch configuration parsing failed: " + packageName, e);
             return new HashMap<>();
         }
     }

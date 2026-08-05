@@ -315,7 +315,8 @@ public abstract class AbsHook {
      * <p>
      * 子类应覆写此方法以实现参数修改、前置校验等自定义逻辑。
      * 若在此阶段调用 {@link #setResult(Object)} 设置了返回值，
-     * 则原方法将被完全跳过，直接进入后置拦截阶段。
+     * 则原方法将被完全跳过，且<strong>不会执行</strong> {@link #after()} 回调，
+     * 返回值将直接作为本次调用的最终结果返回。
      */
     public void before() {
     }
@@ -541,7 +542,8 @@ public abstract class AbsHook {
      * 替换当前被拦截方法的返回值。
      * <p>
      * 设置后原方法的原始返回值将被忽略，框架会将此处设置的值作为最终返回值。
-     * 若在 {@link #before()} 阶段调用此方法，原方法将被完全跳过。
+     * 若在 {@link #before()} 阶段调用此方法，原方法将被完全跳过，
+     * 且<strong>不执行</strong> {@link #after()} 回调（见 {@link #before()} 的说明）。
      *
      * @param result 要设置的新返回值
      */
@@ -560,6 +562,40 @@ public abstract class AbsHook {
      */
     public final void setThrowable(Throwable throwable) {
         getState().throwable = throwable;
+    }
+
+    /**
+     * 记录 proceed 阶段中首个未消费的异常。
+     * <p>
+     * 与 {@link #setThrowable(Throwable)} 不同，本方法仅在当前尚未记录任何异常时生效，
+     * 保证 proceed 阶段产生的原始异常不会被后续阶段（如 after）的异常覆盖，遵循"首因优先"原则。
+     * <p>
+     * 仅在 {@link HookBridge} 内部调用。
+     *
+     * @param throwable proceed 阶段未消费的异常，不为 {@code null}
+     */
+    final void setProceedThrowable(@NonNull Throwable throwable) {
+        CallState state = getState();
+        if (state.throwable == null) {
+            state.throwable = throwable;
+        }
+    }
+
+    /**
+     * 记录 after 阶段中首个未消费的异常。
+     * <p>
+     * 同样遵循"首因优先"原则：若 proceed 阶段已记录异常（{@link #getThrowable()}
+     * 不为 {@code null}），则此处设置不生效，原始异常得以保留。
+     * <p>
+     * 仅在 {@link HookBridge} 内部调用。
+     *
+     * @param throwable after 阶段未消费的异常，不为 {@code null}
+     */
+    final void setAfterThrowable(@NonNull Throwable throwable) {
+        CallState state = getState();
+        if (state.throwable == null) {
+            state.throwable = throwable;
+        }
     }
 
     /**

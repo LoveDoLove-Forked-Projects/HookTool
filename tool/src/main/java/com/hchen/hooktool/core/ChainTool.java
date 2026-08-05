@@ -28,6 +28,7 @@ import com.hchen.hooktool.exception.UnexpectedException;
 import com.hchen.hooktool.hook.AbsHook;
 
 import java.lang.reflect.Executable;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.function.Function;
@@ -66,9 +67,9 @@ public final class ChainTool {
     private ChainData chainData;
 
     /**
-     * 已成功执行的链式数据哈希集合，用于运行时去重，防止对相同目标重复 Hook。
+     * 已成功执行的链式数据标识集合，用于运行时去重，防止对相同目标重复 Hook。
      */
-    private final HashSet<Integer> dataHashSet = new HashSet<>();
+    private final HashSet<String> dataHashSet = new HashSet<>();
 
     /**
      * 以指定的目标类初始化链式工具实例。
@@ -191,10 +192,11 @@ public final class ChainTool {
      * @throws UnexpectedException 当检测到重复的链式数据时抛出
      */
     private void runChain() {
-        Objects.requireNonNull(chainData);
+        Objects.requireNonNull(chainData, "chainData is null; do not reuse ChainHook after hook().");
 
         try {
-            if (!dataHashSet.contains(chainData.hashCode())) {
+            String chainKey = chainKey(chainData);
+            if (!dataHashSet.contains(chainKey)) {
                 runFind();
                 if (chainData.throwable != null) {
                     if (chainData.isIgnoreThrow) {
@@ -211,7 +213,7 @@ public final class ChainTool {
                     }
                 }
 
-                dataHashSet.add(chainData.hashCode());
+                dataHashSet.add(chainKey);
                 for (Executable executable : chainData.executables) {
                     CoreTool.hook(executable, chainData.absHook);
                 }
@@ -221,6 +223,29 @@ public final class ChainTool {
         } finally {
             chainData = null;
         }
+    }
+
+    /**
+     * 生成链式数据的稳定去重键。
+     * <p>
+     * 基于查找类型、方法名与参数类型生成，避免使用 {@code hashCode()} 的 int 碰撞风险。
+     * 不包含 {@link ChainData#absHook} 等运行时可变字段，保证同一目标的多次链式调用
+     * 产生相同键。
+     * <p>
+     * 对于 {@link ChainType#EXECUTABLE} 类型，由于方法名与参数均为 {@code null}，
+     * 额外并入可执行对象自身的身份描述（声明类 + 签名），避免同一链上对
+     * 两个不同的可执行对象去重误判。
+     *
+     * @param data 待处理的链式数据
+     * @return 稳定的去重键字符串
+     */
+    @NonNull
+    private static String chainKey(@NonNull ChainData data) {
+        if (data.chainType == ChainType.EXECUTABLE && data.executable != null) {
+            return data.chainType + "#" + data.executable.toGenericString();
+        }
+        String params = Arrays.toString(data.parameterTypes);
+        return data.chainType + "#" + data.methodName + "#" + params;
     }
 
     /**

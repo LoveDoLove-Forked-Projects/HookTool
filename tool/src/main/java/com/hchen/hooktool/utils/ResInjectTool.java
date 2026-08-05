@@ -23,7 +23,6 @@ import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.loader.ResourcesLoader;
 import android.content.res.loader.ResourcesProvider;
-import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.util.Pair;
 import android.util.TypedValue;
@@ -115,7 +114,10 @@ public final class ResInjectTool {
         if (!isInjected.compareAndSet(false, true)) return;
 
         String sourceDir = ModuleData.getModulePath();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        // 注意：minSdk 已提升至 30，SDK_INT >= R 恒真，此处仅保留 ResourcesLoader（高版本）注入路径。
+        // 旧的低版本（splitResDirs 注入）逻辑见下方注释块，仅供参考保留。
+        // if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        try {
             if (resourcesLoader == null) {
                 try (ParcelFileDescriptor pfd = ParcelFileDescriptor.open(new File(sourceDir), ParcelFileDescriptor.MODE_READ_ONLY)) {
                     ResourcesProvider provider = ResourcesProvider.loadFromApk(pfd);
@@ -148,30 +150,35 @@ public final class ResInjectTool {
                     }
                 }
             );
-        } else {
-            CoreTool.hookConstructor(
-                "android.content.res.ResourcesKey",
-                String.class /* resDir */, String[].class /* splitResDirs */, String[].class /* overlayDirs */,
-                String[].class,/* libDirs */ int.class /* displayId */, Configuration.class /* overrideConfig */,
-                "android.content.res.CompatibilityInfo" /* compatInfo */,
-                new AbsHook() {
-                    @Override
-                    public void before() {
-                        String[] splitResDirs = (String[]) getArg(1);
-                        if (splitResDirs != null) {
-                            List<String> loaders = new ArrayList<>(Arrays.asList(splitResDirs));
-                            if (!loaders.contains(sourceDir)) {
-                                loaders.add(sourceDir);
-                                setArg(1, loaders.toArray(new String[0]));
-                            }
-                        } else {
-                            setArg(1, new String[]{sourceDir});
-                        }
-                    }
-                }
-            );
+        } catch (Throwable t) {
+            // 注入失败回滚标志，允许后续重新尝试，避免失败后注入永久失效、静默 no-op。
+            isInjected.set(false);
+            throw t;
         }
-
+        // } else {
+        //     // 旧版（Android R 以下）注入：通过修改 ResourcesKey 构造的 splitResDirs 参数注入模块资源目录。
+        //     CoreTool.hookConstructor(
+        //         "android.content.res.ResourcesKey",
+        //         String.class /* resDir */, String[].class /* splitResDirs */, String[].class /* overlayDirs */,
+        //         String[].class,/* libDirs */ int.class /* displayId */, Configuration.class /* overrideConfig */,
+        //         "android.content.res.CompatibilityInfo" /* compatInfo */,
+        //         new AbsHook() {
+        //             @Override
+        //             public void before() {
+        //                 String[] splitResDirs = (String[]) getArg(1);
+        //                 if (splitResDirs != null) {
+        //                     List<String> loaders = new ArrayList<>(Arrays.asList(splitResDirs));
+        //                     if (!loaders.contains(sourceDir)) {
+        //                         loaders.add(sourceDir);
+        //                         setArg(1, loaders.toArray(new String[0]));
+        //                     }
+        //                 } else {
+        //                     setArg(1, new String[]{sourceDir});
+        //                 }
+        //             }
+        //         }
+        //     );
+        // }
     }
 
     /**
@@ -351,7 +358,7 @@ public final class ResInjectTool {
                     setResult(value);
                 }
             } catch (Throwable t) {
-                XposedLog.logD(TAG, "Failed to replacement res.", t);
+                XposedLog.logW(TAG, "Failed to replacement res.", t);
             }
         }
     };
@@ -386,7 +393,7 @@ public final class ResInjectTool {
                     }
                 }
             } catch (Throwable t) {
-                XposedLog.logD(TAG, "Failed to replacement typed array.", t);
+                XposedLog.logW(TAG, "Failed to replacement typed array.", t);
             }
         }
     };

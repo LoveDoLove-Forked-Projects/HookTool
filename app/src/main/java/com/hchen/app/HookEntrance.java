@@ -34,7 +34,6 @@ import com.hchen.hooktool.log.AndroidLog;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * HookTool 模块的主入口类。
@@ -50,8 +49,10 @@ import java.util.Objects;
  * @see ModuleEntrance
  * @see TestHook
  */
-public class InitHook extends ModuleEntrance {
+public class HookEntrance extends ModuleEntrance {
     private static final String TAG = "InitHook";
+    private final TestHook testHook = new TestHook();
+    private final TestHookKt testHookKt = new TestHookKt();
 
     /**
      * 配置模块的全局参数。
@@ -126,7 +127,7 @@ public class InitHook extends ModuleEntrance {
     /**
      * 目标应用包就绪时的回调。
      *
-     * <p>当目标应用的包完全就绪（类加载器和组件工厂均已可用）后触发此方法。
+     * <p>当目标应用的包完全就绪后触发此方法。
      * 当前实现输出类加载器和组件工厂的调试信息，委托父类执行默认处理，
      * 并在此基础上完成以下操作：</p>
      * <ul>
@@ -144,7 +145,7 @@ public class InitHook extends ModuleEntrance {
         super.handlePackageReady(param);
 
         ModuleData.setClassLoader(param.getClassLoader());
-        new TestHook().handlePackageReady(param);
+        testHook.handlePackageReady(param);
     }
 
     /**
@@ -195,9 +196,23 @@ public class InitHook extends ModuleEntrance {
         AndroidLog.logD(TAG, "handleHotReloading: " + extras);
 
         Map<String, Object> map = new HashMap<>();
-        map.putAll(Objects.requireNonNull(new TestHook().handleHotReloading(extras)));
-        map.putAll(Objects.requireNonNull(new TestHookKt().handleHotReloading(extras)));
+        map.putAll(testHook.handleHotReloading(extras));
+        map.putAll(testHookKt.handleHotReloading(extras));
         return map;
+    }
+
+    /**
+     * 热更新准备阶段发生异常时的回调。
+     * <p>
+     * 输出异常日志便于定位热更新被拒的原因。
+     *
+     * @param throwable 在热更新准备阶段被捕获的异常实例
+     * @see ModuleEntrance#handleHotReloadingFailed(Throwable)
+     */
+    @Override
+    public void handleHotReloadingFailed(@NonNull Throwable throwable) {
+        AndroidLog.logE(TAG, "handleHotReloadingFailed: " + throwable);
+        super.handleHotReloadingFailed(throwable);
     }
 
     /**
@@ -206,9 +221,6 @@ public class InitHook extends ModuleEntrance {
      * 先通过父类恢复框架级状态（ClassLoader、Xposed 环境等），
      * 再将恢复的 ClassLoader 设置到 {@link ModuleData} 中供后续 Hook 使用，
      * 最后依次通知子模块执行其内部状态恢复。
-     * <p>
-     * 注意：旧 Hook 句柄的解除由 {@code onHotReloaded} 的 {@code finally} 块统一处理，
-     * 此处不再需要手动调用 {@link HookRegistry#reloaded(HotReloadedParam)}。
      *
      * @param param       热更新完成参数，不为 {@code null}
      * @param classLoader 从旧代码保存的状态中恢复的宿主应用 ClassLoader，不为 {@code null}
@@ -220,7 +232,7 @@ public class InitHook extends ModuleEntrance {
         super.handleHotReloaded(param, classLoader);
         ModuleData.setClassLoader(classLoader);
 
-        new TestHook().handleHotReloaded(param);
-        new TestHookKt().handleHotReloaded(param);
+        testHook.handleHotReloaded(param);
+        testHookKt.handleHotReloaded(param);
     }
 }

@@ -31,6 +31,10 @@ import java.util.Objects;
  * 该记录封装了一次 Shell 命令执行的完整输出信息，包括所执行的命令字符串、
  * 进程退出码、标准输出（stdout）内容以及标准错误（stderr）内容，
  * 方便调用方对命令执行结果进行全方位的检查与分析。
+ * <p>
+ * 构造时会对 {@code outputs} 与 {@code errors} 数组进行防御性拷贝，
+ * 防止外部对数组的后续修改影响本记录；但数组内部元素仍为共享引用，
+ * 跨线程传递时请勿并发修改数组内容。
  *
  * @param command  实际执行的完整命令字符串
  * @param exitCode 命令进程的退出码字符串（{@code "0"} 通常表示执行成功）
@@ -41,6 +45,16 @@ import java.util.Objects;
  */
 public record ShellResult(@NonNull String command, @NonNull String exitCode,
                           @NonNull String[] outputs, @NonNull String[] errors) {
+    public ShellResult {
+        Objects.requireNonNull(command);
+        Objects.requireNonNull(exitCode);
+        Objects.requireNonNull(outputs);
+        Objects.requireNonNull(errors);
+        // 防御性拷贝，避免外部修改传入数组影响本记录的不可变性。
+        outputs = outputs.clone();
+        errors = errors.clone();
+    }
+
     /**
      * 判断该命令是否执行成功。
      * <p>
@@ -72,8 +86,8 @@ public record ShellResult(@NonNull String command, @NonNull String exitCode,
         return "ShellResult{" +
             "command='" + command + '\'' +
             ", exitCode='" + exitCode + '\'' +
-            ", outputs=" + Arrays.toString(outputs) +
-            ", errors=" + Arrays.toString(errors) +
+            ", outputs=" + Arrays.deepToString(outputs) +
+            ", errors=" + Arrays.deepToString(errors) +
             '}';
     }
 }

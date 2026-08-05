@@ -33,6 +33,7 @@ import com.hchen.hooktool.log.AndroidLog;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -53,6 +54,7 @@ import io.github.libxposed.api.XposedModuleInterface;
  * <ul>
  *   <li>{@link #handleHotReloading(Bundle)} — 热更新前在旧代码中执行，返回需保存的状态数据</li>
  *   <li>{@link #handleHotReloadingFailed(Throwable)} — 热更新准备阶段发生异常时的回调</li>
+ *   <li>{@link #isHotReloadingAllowed(String)} — 按目标包名决定是否允许热更新（可覆写）</li>
  *   <li>{@link #handleHotReloaded(HotReloadedParam, ClassLoader)} — 热更新完成后在新代码中执行，
  *       携带恢复的 ClassLoader，自动解除旧 Hook 并重新分发状态</li>
  * </ul>
@@ -66,6 +68,8 @@ public abstract class ModuleEntrance extends XposedModule {
     // 标记当前包是否应被跳过处理
     private volatile boolean shouldSkip = false;
     private volatile String processName = "";
+    // 当前正在处理的目标包名，供热重载允许/拒绝策略使用
+    private volatile String currentPackageName = "";
 
     /**
      * 初始化模块配置的抽象方法。
@@ -149,19 +153,21 @@ public abstract class ModuleEntrance extends XposedModule {
      * 模块即将被热更新时触发的回调（在旧代码中执行）。
      * <p>
      * 此回调在热更新触发时于旧模块代码中运行，子类应覆写此方法返回需要
-     * 在热更新后恢复的状态键值对。返回的 {@link Map} 会被
-     * {@link ModuleEntrance#onHotReloading(HotReloadingParam)} 合并到全局快照中，
+     * 在热更新后恢复的状态键值对。返回的 {@link Map} 会被顶层
+     * {@link #onHotReloading(HotReloadingParam)} 合并到全局快照中（与
+     * {@link HookRegistry#reloading(Bundle)} 收集的钩子级状态一并合并），
      * 并通过 {@code param.setSavedInstanceState(merged)} 持久化。
      * <p>
      * 注意：该方法不再直接控制是否允许热更新——允许/拒绝逻辑统一由
-     * {@code onHotReloading} 的顶层实现管理。子类仅需关心状态数据的保存。
+     * {@code onHotReloading} 的顶层实现管理，可通过覆写
+     * {@link #isHotReloadingAllowed(String)} 按目标包名控制。子类仅需关心状态数据的保存。
      *
      * @param extras 热更新触发的附加数据 {@link Bundle}，可能为 {@code null}
      *               （当框架未传递额外数据时）
      * @return 模块级状态键值对的 {@link Map}；默认返回空 {@link HashMap}，
      * 表示无需保存任何状态
+     * @see #onHotReloading(HotReloadingParam)
      * @see #handleHotReloaded(HotReloadedParam, ClassLoader)
-     * @see HookRegistry#reloading(Bundle)
      */
     @NonNull
     public Map<String, Object> handleHotReloading(@Nullable Bundle extras) {
@@ -181,6 +187,27 @@ public abstract class ModuleEntrance extends XposedModule {
      * @see #handleHotReloading(Bundle)
      */
     public void handleHotReloadingFailed(Throwable throwable) {
+    }
+
+    /**
+     * 判断当前模块是否允许目标应用进行热重载。
+     * <p>
+     * 默认返回 {@code true}（允许全部）。子类可覆写此方法，对需要阻止热重载的
+     * 目标包名返回 {@code false}。当返回 {@code false} 时，顶层
+     * {@link #onHotReloading(HotReloadingParam)} 会直接返回 {@code false} 拒绝热重载，
+     * 不做任何状态保存与注册表清理（准备阶段无副作用）。
+     * <p>
+     * 注意：{@code packageName} 在 {@link #onPackageLoaded(PackageLoadedParam)} 阶段记录，
+     * 因此仅在处理过目标包的进程中携带实际包名；在 SystemServer 等未触发
+     * {@code onPackageLoaded} 的进程下可能为空字符串，覆写实现需对此容错。
+     *
+     * @param packageName 目标被 Hook 应用的包名（在 onPackageLoaded 阶段记录，
+     *                    SystemServer 等进程下可能为空字符串）
+     * @return {@code true} 允许热重载；{@code false} 拒绝热重载
+     * @see #onHotReloading(HotReloadingParam)
+     */
+    public boolean isHotReloadingAllowed(@NonNull String packageName) {
+        return true;
     }
 
     /**
@@ -227,6 +254,7 @@ public abstract class ModuleEntrance extends XposedModule {
             return;
         }
 
+        currentPackageName = param.getPackageName();
         handlePackageLoaded(param);
     }
 
@@ -248,13 +276,23 @@ public abstract class ModuleEntrance extends XposedModule {
     @Override
     public final boolean onHotReloading(@NonNull HotReloadingParam param) {
         try {
+            // 允许/拒绝策略由子类覆写 isHotReloadingAllowed 控制；拒绝时直接返回，不做任何状态变更。
+            if (!isHotReloadingAllowed(currentPackageName)) {
+                return false;
+            }
+
+            // 在收集/清空注册表之前先取出 ClassLoader，失败则提前拒绝且注册表不受影响。
+            ClassLoader classLoader = ModuleData.getClassLoader();
+
             Map<String, Object> merged = new HashMap<>();
 
             merged.putAll(handleHotReloading(param.getExtras()));
-            merged.putAll(HookRegistry.reloading(param.getExtras()));
-            merged.put(ModuleData.MODULE_HOST_CLASSLOADER, ModuleData.getClassLoader());
+            merged.putAll(HookRegistry.reloading(param.getExtras())); // 不再内部清空注册表
+            merged.put(ModuleData.MODULE_HOST_CLASSLOADER, classLoader);
 
             param.setSavedInstanceState(merged);
+            // 仅在状态保存成功后清空，热更新被拒绝时旧 hook 注册信息得以保留。
+            HookRegistry.clear();
             return true;
         } catch (Throwable throwable) {
             handleHotReloadingFailed(throwable);
@@ -265,6 +303,7 @@ public abstract class ModuleEntrance extends XposedModule {
 
     @Override
     public final void onHotReloaded(@NonNull HotReloadedParam param) {
+        List<HookHandle> oldHandles = param.getOldHookHandles(); // 预取，供先解除与 finally 兜底复用
         try {
             processName = param.getProcessName();
             ModuleData.setXposedEnvironment(true);
@@ -281,13 +320,29 @@ public abstract class ModuleEntrance extends XposedModule {
                     classLoader = (ClassLoader) cl;
                 }
             }
-            Objects.requireNonNull(classLoader);
+            // 带上下文消息的校验，缺键/类型不匹配时给出可诊断提示，而非裸 NPE。
+            Objects.requireNonNull(classLoader,
+                "Hot update status missing or key mismatch: " + ModuleData.MODULE_HOST_CLASSLOADER);
+
+            // 先解除旧 Hook，杜绝与新注册 Hook 的并存双执行窗口。
+            unhookAll(oldHandles);
+
             handleHotReloaded(param, classLoader);
             HookRegistry.reloaded(param);
         } finally {
-            for (HookHandle handle : param.getOldHookHandles()) {
-                handle.unhook();
-            }
+            // 任何路径都确保旧 Hook 被解除。
+            unhookAll(oldHandles);
+        }
+    }
+
+    /**
+     * 批量解除旧 Hook 句柄。{@link HookHandle#unhook()} 幂等，重复调用无害。
+     *
+     * @param handles 待解除的 Hook 句柄列表
+     */
+    private static void unhookAll(@NonNull List<HookHandle> handles) {
+        for (HookHandle handle : handles) {
+            handle.unhook();
         }
     }
 

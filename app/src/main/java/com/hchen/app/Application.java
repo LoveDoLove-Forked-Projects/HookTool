@@ -66,7 +66,7 @@ public class Application extends android.app.Application
      * Xposed 服务绑定成功时的回调。
      *
      * <p>当 {@link XposedServiceHelper} 成功连接到 Xposed 服务后，
-     * 会触发此方法，当前实现仅输出调试级别的绑定日志。</p>
+     * 会触发此方法。</p>
      *
      * @param service 已成功绑定的 {@link XposedService} 服务实例
      */
@@ -79,7 +79,7 @@ public class Application extends android.app.Application
      * Xposed 服务意外终止时的回调。
      *
      * <p>当 {@link XposedService} 服务连接异常断开或进程死亡时，
-     * 会触发此方法，当前实现仅输出调试级别的断开日志。</p>
+     * 会触发此方法。</p>
      *
      * @param service 已断开连接的 {@link XposedService} 服务实例
      */

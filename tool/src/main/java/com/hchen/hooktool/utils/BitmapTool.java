@@ -21,7 +21,6 @@ package com.hchen.hooktool.utils;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
-import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
@@ -34,8 +33,9 @@ import android.graphics.drawable.Drawable;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.hchen.hooktool.log.AndroidLog;
+
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 
 /**
  * Bitmap 图像处理工具集。
@@ -48,6 +48,10 @@ import java.io.IOException;
  * @author 焕晨HChen
  */
 public final class BitmapTool {
+    private static final String TAG = "BitmapTool";
+    /** 圆角裁剪时用于绘制圆角矩形遮罩的颜色，最终由原图经 {@link PorterDuff.Mode#SRC_IN} 覆盖，取值不影响结果。 */
+    private static final int ROUND_RECT_COLOR = 0xff424242;
+
     private BitmapTool() {
     }
 
@@ -113,10 +117,12 @@ public final class BitmapTool {
      */
     @NonNull
     public static Bitmap getRoundedCornerBitmap(@NonNull Bitmap bitmap, float radius) {
+        // 负数半径会导致 drawRoundRect 抛 IllegalArgumentException，钳制为非负值
+        radius = Math.max(0, radius);
         Bitmap output = Bitmap.createBitmap(bitmap.getWidth(), bitmap.getHeight(), Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(output);
 
-        final int color = 0xff424242;
+        final int color = ROUND_RECT_COLOR;
         final Paint paint = new Paint();
         final Rect rect = new Rect(0, 0, bitmap.getWidth(), bitmap.getHeight());
         final RectF rectF = new RectF(rect);
@@ -135,45 +141,44 @@ public final class BitmapTool {
     /**
      * 按照指定的目标宽高对 {@link Bitmap} 进行缩放。
      * <p>
-     * 通过 {@link Matrix#postScale(float, float)} 计算缩放矩阵并创建新 Bitmap，
-     * 原始 Bitmap 不会被回收。该方法支持等比与非等比缩放。
+     * 通过 {@link Bitmap#createScaledBitmap} 实现，原始 Bitmap 不会被回收。
+     * 该方法支持等比与非等比缩放。
      *
      * @param bitmap    待缩放的原始 Bitmap，不得为 {@code null}
-     * @param newWidth  缩放后的目标宽度（单位：px）
-     * @param newHeight 缩放后的目标高度（单位：px）
+     * @param newWidth  缩放后的目标宽度（单位：px），必须大于 0
+     * @param newHeight 缩放后的目标高度（单位：px），必须大于 0
      * @return 缩放后的新 {@link Bitmap} 实例，永不为 {@code null}
+     * @throws IllegalArgumentException 当 {@code newWidth} 或 {@code newHeight} 不大于 0 时抛出
      */
     @NonNull
     public static Bitmap scaleBitmap(@NonNull Bitmap bitmap, int newWidth, int newHeight) {
-        int width = bitmap.getWidth();
-        int height = bitmap.getHeight();
-
-        float scaleWidth = ((float) newWidth) / width;
-        float scaleHeight = ((float) newHeight) / height;
-
-        Matrix matrix = new Matrix();
-        matrix.postScale(scaleWidth, scaleHeight);
-
-        return Bitmap.createBitmap(bitmap, 0, 0, width, height, matrix, true);
+        if (newWidth <= 0 || newHeight <= 0) {
+            throw new IllegalArgumentException(
+                "newWidth and newHeight must be greater than 0, but got: " + newWidth + " x " + newHeight
+            );
+        }
+        return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true);
     }
 
     /**
      * 将 {@link Bitmap} 以 PNG 格式压缩为 {@code byte[]}。
      * <p>
-     * 压缩质量固定为 100（无损）。内部使用 try-with-resources 确保输出流被正确关闭。
-     * 若压缩过程中发生 {@link IOException}，则返回空字节数组。
+     * PNG 为无损格式，压缩参数 {@code quality} 不适用（仅对 JPEG 有意义）。
+     * 若 {@link Bitmap#compress} 返回 {@code false}（如内存不足等编码失败），
+     * 返回长度为 0 的字节数组，调用方可通过判空数组感知失败。
      *
      * @param bitmap 待压缩的 Bitmap 对象，不得为 {@code null}
-     * @return PNG 格式的字节数组；若发生异常则返回长度为 0 的数组，永不为 {@code null}
+     * @return PNG 格式的字节数组；若编码失败则返回长度为 0 的数组，永不为 {@code null}
      */
     @NonNull
     public static byte[] bitmapToBytes(@NonNull Bitmap bitmap) {
-        try (ByteArrayOutputStream stream = new ByteArrayOutputStream()) {
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream);
-            return stream.toByteArray();
-        } catch (IOException e) {
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        boolean success = bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream);
+        if (!success) {
+            AndroidLog.logW(TAG, "Bitmap compress failed, returning empty byte array.");
             return new byte[0];
         }
+        return stream.toByteArray();
     }
 
     /**
@@ -186,10 +191,6 @@ public final class BitmapTool {
      */
     @Nullable
     public static Bitmap bytesToBitmap(@NonNull byte[] bytes) {
-        if (bytes.length != 0) {
-            return BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-        } else {
-            return null;
-        }
+        return bytes.length != 0 ? BitmapFactory.decodeByteArray(bytes, 0, bytes.length) : null;
     }
 }

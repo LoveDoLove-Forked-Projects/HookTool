@@ -30,19 +30,16 @@ import com.hchen.hooktool.hook.AbsHook;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
 
 /**
  * Hook 功能的示例模块实现。
- *
- * <p>继承自 {@link AbsModule}，是 HookTool 框架中具体 Hook 逻辑的承载单元。
- * 开发者应覆写 {@link #onPackageReady(XposedModuleInterface.PackageReadyParam)} 方法以注册 Hook 逻辑，
- * 并可选择性覆写 {@link #onHotReloaded(XposedModuleInterface.HotReloadedParam)} 以支持热重载状态恢复。</p>
- *
- * <p>当前实现展示了包就绪和热重载完成两个阶段的 Hook 注册方法。</p>
+ * <p>
+ * 继承自 {@link AbsModule}，是 HookTool 框架中具体 Hook 逻辑的承载单元。
+ * <p>
+ * 开发者应覆写 {@link #onPackageReady(XposedModuleInterface.PackageReadyParam)} 方法以注册 Hook 逻辑。
  *
  * @see AbsModule
  */
@@ -56,8 +53,15 @@ public class TestHook extends AbsModule {
 
     @Override
     protected void onHotReloaded(@NonNull XposedModuleInterface.HotReloadedParam param) {
-        // noinspection unchecked
-        context = (Context) ((Map<String, Object>) Objects.requireNonNull(param.getSavedInstanceState())).get("CONTEXT");
+        Object savedState = param.getSavedInstanceState();
+        if (savedState instanceof Map) {
+            Object savedContext = ((Map<?, ?>) savedState).get("CONTEXT");
+            if (savedContext instanceof Context) {
+                context = (Context) savedContext;
+            }
+        }
+        // 热更新后在本类（新代码）实例中重新注册 Hook；
+        // 旧的 Hook 句柄已由框架解除，此处注册的是全新 AbsHook 实例，不会重复执行。
         registerHooks();
     }
 
@@ -82,7 +86,10 @@ public class TestHook extends AbsModule {
                 @Override
                 public void after() {
                     super.after();
-                    setField(getThisObject(), "field", true);
+                    Object thisObject = getThisObject();
+                    if (thisObject != null) {
+                        setField(thisObject, "test", true);
+                    }
                 }
 
                 @Override
@@ -98,9 +105,12 @@ public class TestHook extends AbsModule {
                 @Override
                 public void onHotReloaded(@Nullable Object thisObject, @NonNull Map<String, Object> inState) {
                     super.onHotReloaded(thisObject, inState);
-                    context = (Context) inState.get("CONTEXT_INNER");
+                    Object savedContext = inState.get("CONTEXT_INNER");
+                    if (savedContext instanceof Context) {
+                        context = (Context) savedContext;
+                    }
                     if (thisObject != null) {
-                        setField(thisObject, "field", true);
+                        setField(thisObject, "test", true);
                     }
                 }
             }

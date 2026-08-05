@@ -136,21 +136,26 @@ public final class SystemPropTool {
      * <p>
      * 适用于需要在特定类加载上下文中访问系统属性的场景（如不同进程或自定义类加载器环境）。
      * 内部通过传入的 {@code classLoader} 重新加载 {@code android.os.SystemProperties} 类并调用其方法。
+     * 若该类在指定类加载器下无法加载，安全返回空字符串。
      *
      * @param key         属性名称
      * @param classLoader 用于加载 {@code android.os.SystemProperties} 类的类加载器
      * @return 属性的字符串值，不存在时为空字符串
      */
     public static String getProp(@NonNull String key, ClassLoader classLoader) {
-        return (String) Optional.ofNullable(
-            callStaticMethod(
-                "android.os.SystemProperties",
-                classLoader,
-                "get",
-                new Class[]{String.class},
-                key
-            )
-        ).orElse("");
+        try {
+            return (String) Optional.ofNullable(
+                callStaticMethod(
+                    "android.os.SystemProperties",
+                    classLoader,
+                    "get",
+                    new Class[]{String.class},
+                    key
+                )
+            ).orElse("");
+        } catch (NoClassDefFoundError e) {
+            return "";
+        }
     }
 
     /**

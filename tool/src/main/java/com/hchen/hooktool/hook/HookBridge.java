@@ -172,8 +172,9 @@ public final class HookBridge {
                         }
                     }
 
-                    if (absHook.getThrowable() != null) {
-                        throw absHook.getThrowable();
+                    Throwable beforeThrowable = absHook.getThrowable();
+                    if (beforeThrowable != null) {
+                        throw beforeThrowable;
                     }
 
                     if (absHook.isResultChanged()) {
@@ -185,8 +186,9 @@ public final class HookBridge {
                         absHook.setOriginalResult(result);
                     } catch (Throwable throwable) {
                         if (!absHook.onThrow(AbsHook.StageEnum.PROCEED, throwable)) {
-                            absHook.setThrowable(throwable);
-                            // 此处不抛出异常，给予 after 拦截的机会
+                            absHook.setProceedThrowable(throwable);
+                            // 记录首个未消费异常，不立即抛出，给予 after 拦截的机会；
+                            // 若用户已在 before/onThrow 中显式 setThrowable，则保留用户设置。
                         }
                     }
 
@@ -194,7 +196,7 @@ public final class HookBridge {
                         absHook.after();
                     } catch (Throwable throwable) {
                         if (!absHook.onThrow(AbsHook.StageEnum.AFTER, throwable)) {
-                            absHook.setThrowable(throwable);
+                            absHook.setAfterThrowable(throwable);
                             throw throwable;
                         }
                     }

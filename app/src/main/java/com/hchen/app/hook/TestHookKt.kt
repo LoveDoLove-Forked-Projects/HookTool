@@ -31,8 +31,8 @@ import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
  * Hook 功能的 Kotlin 示例模块实现。
  *
  * 继承自 [AbsModule]，以 Kotlin 语法展示了 Hook 模块的基本结构。
- * 开发者应覆写 [onPackageReady] 方法以注册 Hook 逻辑，
- * 并可选择性覆写 [onHotReloaded] 以支持热重载状态恢复。
+ *
+ * 开发者应覆写 [onPackageReady] 方法以注册 Hook 逻辑。
  *
  * @see AbsModule
  */
@@ -46,7 +46,13 @@ class TestHookKt : AbsModule() {
 
     @SuppressLint("XposedNewApi")
     override fun onHotReloaded(param: HotReloadedParam) {
-        context = (param.savedInstanceState as MutableMap<String, Any>)["CONTEXT"] as Context?
+        val savedState = param.savedInstanceState
+        if (savedState is Map<*, *>) {
+            val savedContext = savedState["CONTEXT"]
+            if (savedContext is Context) {
+                context = savedContext
+            }
+        }
         registerHooks()
     }
 
@@ -81,7 +87,7 @@ class TestHookKt : AbsModule() {
                  */
                 override fun after() {
                     super.after()
-                    thisObject.setField("field", true)
+                    thisObject?.setField("test", true)
                 }
 
                 /**
@@ -91,7 +97,7 @@ class TestHookKt : AbsModule() {
                  * @param e     被捕获的异常对象
                  * @return 返回 `true` 表示异常已被消费
                  */
-                override fun onThrow(stage: AbsHook.StageEnum, e: Throwable): Boolean {
+                override fun onThrow(stage: StageEnum, e: Throwable): Boolean {
                     return super.onThrow(stage, e)
                 }
 
@@ -114,8 +120,11 @@ class TestHookKt : AbsModule() {
                  */
                 override fun onHotReloaded(thisObject: Any?, inState: MutableMap<String, Any?>) {
                     super.onHotReloaded(thisObject, inState)
-                    context = inState["CONTEXT_INNER"] as Context?
-                    thisObject?.setField("field", true)
+                    val savedContext = inState["CONTEXT_INNER"]
+                    if (savedContext is Context) {
+                        context = savedContext
+                    }
+                    thisObject?.setField("test", true)
                 }
             }
         )
