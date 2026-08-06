@@ -218,9 +218,8 @@ public class HookEntrance extends ModuleEntrance {
     /**
      * 分发模块热更新完成事件（在新代码中执行）。
      * <p>
-     * 先通过父类恢复框架级状态（ClassLoader、Xposed 环境等），
-     * 再将恢复的 ClassLoader 设置到 {@link ModuleData} 中供后续 Hook 使用，
-     * 最后依次通知子模块执行其内部状态恢复。
+     * 先通过父类恢复框架级状态（ClassLoader 回写、Xposed 环境等），
+     * 再依次通知子模块执行其内部状态恢复。
      *
      * @param param       热更新完成参数，不为 {@code null}
      * @param classLoader 从旧代码保存的状态中恢复的宿主应用 ClassLoader，不为 {@code null}
@@ -230,7 +229,6 @@ public class HookEntrance extends ModuleEntrance {
     public void handleHotReloaded(@NonNull HotReloadedParam param, @NonNull ClassLoader classLoader) {
         AndroidLog.logD(TAG, "handleHotReloaded: " + param);
         super.handleHotReloaded(param, classLoader);
-        ModuleData.setClassLoader(classLoader);
 
         testHook.handleHotReloaded(param);
         testHookKt.handleHotReloaded(param);

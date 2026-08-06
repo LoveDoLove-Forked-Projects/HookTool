@@ -44,8 +44,10 @@ import java.util.function.Function;
 public final class ResultData<R> {
     private final IDecomposer<R> decomposer;
     private volatile boolean isExecuted;
-    private R result;
-    private Throwable throwable;
+    /** 计算结果；{@code volatile} 保证 DCL 快速路径（不持有锁）下对首次计算结果的可见性。 */
+    private volatile R result;
+    /** 捕获的异常；同 {@link #result} 需要跨线程可见。 */
+    private volatile Throwable throwable;
 
     /**
      * 创建一个惰性求值的结果包装实例。

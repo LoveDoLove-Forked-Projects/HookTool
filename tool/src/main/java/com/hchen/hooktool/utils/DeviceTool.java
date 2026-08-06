@@ -518,6 +518,7 @@ public final class DeviceTool {
 
     private static boolean isPadBySize(@NonNull Context context) {
         WindowManager windowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager == null) return false;
         Rect bounds = windowManager.getCurrentWindowMetrics().getBounds();
         DisplayMetrics dm = context.getResources().getDisplayMetrics();
         double x = Math.pow(bounds.width() / dm.xdpi, 2);

@@ -1506,7 +1506,10 @@ open class CoreTool : XposedLog() {
                 ).intercept(absHook)
             }.onSuccess {
                 if (ModuleConfig.isShowHookSuccessLog()) {
-                    logI(getTag(), "Success to hook: $this")
+                    try {
+                        logI(getTag(), "Success to hook: $this")
+                    } catch (_: Throwable) {
+                    }
                 }
             }.getOrThrow()
         }
@@ -1633,7 +1636,10 @@ open class CoreTool : XposedLog() {
                 ).intercept(absHook)
             }.onSuccess {
                 if (ModuleConfig.isShowHookSuccessLog()) {
-                    logI(getTag(), "Success to hook: $this")
+                    try {
+                        logI(getTag(), "Success to hook: $this")
+                    } catch (_: Throwable) {
+                    }
                 }
             }.getOrThrow()
         }

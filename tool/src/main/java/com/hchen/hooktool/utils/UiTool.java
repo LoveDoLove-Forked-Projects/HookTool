@@ -242,11 +242,15 @@ public final class UiTool {
      */
     @NonNull
     public static Point getMaximumScreenSize(@NonNull WindowManager windowManager) {
-        Point point = new Point();
-        Rect bounds = windowManager.getMaximumWindowMetrics().getBounds();
-        point.x = bounds.width();
-        point.y = bounds.height();
-        return point;
+        try {
+            Point point = new Point();
+            Rect bounds = windowManager.getMaximumWindowMetrics().getBounds();
+            point.x = bounds.width();
+            point.y = bounds.height();
+            return point;
+        } catch (Throwable ignore) {
+            return new Point();
+        }
     }
 
     /**
@@ -270,22 +274,27 @@ public final class UiTool {
      */
     @NonNull
     public static Point getCurrentWindowSize(@NonNull WindowManager windowManager) {
-        Point point = new Point();
-        Rect bounds = windowManager.getCurrentWindowMetrics().getBounds();
-        point.x = bounds.width();
-        point.y = bounds.height();
-        return point;
+        try {
+            Point point = new Point();
+            Rect bounds = windowManager.getCurrentWindowMetrics().getBounds();
+            point.x = bounds.width();
+            point.y = bounds.height();
+            return point;
+        } catch (Throwable ignore) {
+            return new Point();
+        }
     }
 
     /**
      * 从 {@link Context} 中获取 {@link WindowManager} 系统服务实例。
      *
      * @param context 上下文对象，不得为 {@code null}
-     * @return {@link WindowManager} 实例
+     * @return {@link WindowManager} 实例；系统服务不可用时可能返回 {@code null}
      */
-    @NonNull
+    @Nullable
     public static WindowManager getWindowManager(@NonNull Context context) {
-        return (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        Object service = context.getSystemService(Context.WINDOW_SERVICE);
+        return service instanceof WindowManager ? (WindowManager) service : null;
     }
 
     /**

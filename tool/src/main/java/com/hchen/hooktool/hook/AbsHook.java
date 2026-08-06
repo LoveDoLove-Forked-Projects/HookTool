@@ -508,6 +508,7 @@ public abstract class AbsHook {
      * 整体替换当前被拦截方法的全部参数。
      * <p>
      * 传入的数组长度必须与原始参数个数一致，否则将抛出异常。
+     * 内部会对传入数组做防御性拷贝，调用方后续修改原数组不影响本次调用。
      *
      * @param args 新的参数数组，长度须与原方法参数列表匹配
      * @throws IllegalArgumentException 当传入数组的长度与原始参数个数不一致时抛出
@@ -521,7 +522,7 @@ public abstract class AbsHook {
             throw new IllegalArgumentException("Parameter quantity mismatch. " +
                 "Target length:" + state.args.length + ", Actual length: " + args.length);
         }
-        state.args = args;
+        state.args = args.clone();
         state.isArgsChanged = true;
     }
 

@@ -30,6 +30,7 @@ import com.hchen.hooktool.core.CoreTool;
 import com.hchen.hooktool.hook.AbsHook;
 import com.hchen.hooktool.hook.HookRegistry;
 import com.hchen.hooktool.log.AndroidLog;
+import com.hchen.hooktool.log.XposedLog;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -200,6 +201,8 @@ public abstract class ModuleEntrance extends XposedModule {
      * 注意：{@code packageName} 在 {@link #onPackageLoaded(PackageLoadedParam)} 阶段记录，
      * 因此仅在处理过目标包的进程中携带实际包名；在 SystemServer 等未触发
      * {@code onPackageLoaded} 的进程下可能为空字符串，覆写实现需对此容错。
+     * 该字段由框架回调线程写入（通常为同一 Binder 线程），本方法不保证跨线程
+     * 强同步可见性，覆写实现不应依赖其严格的最新值。
      *
      * @param packageName 目标被 Hook 应用的包名（在 onPackageLoaded 阶段记录，
      *                    SystemServer 等进程下可能为空字符串）
@@ -214,7 +217,8 @@ public abstract class ModuleEntrance extends XposedModule {
      * 模块已完成热更新时触发的回调（在新代码中执行）。
      * <p>
      * 此回调在热更新完成后于新模块代码中运行，此时已从旧代码保存的状态中
-     * 恢复了宿主应用的 {@link ClassLoader}（通过 {@link ModuleData#setClassLoader(ClassLoader)}）。
+     * 恢复了宿主应用的 {@link ClassLoader}（框架已回写
+     * {@link ModuleData#setClassLoader(ClassLoader)}，本方法内可直接使用默认类加载 API）。
      * 子类可覆写此方法执行重新挂钩或特定的初始化操作。
      * <p>
      * 旧 Hook 句柄的解除由 {@code onHotReloaded} 的 {@code finally} 块统一处理，
@@ -295,7 +299,13 @@ public abstract class ModuleEntrance extends XposedModule {
             HookRegistry.clear();
             return true;
         } catch (Throwable throwable) {
-            handleHotReloadingFailed(throwable);
+            try {
+                handleHotReloadingFailed(throwable);
+            } catch (Throwable failedError) {
+                XposedLog.logW("ModuleEntrance",
+                    "handleHotReloadingFailed() threw an exception, ignored to preserve the original exception.",
+                    failedError);
+            }
             CoreTool.throwIt(throwable);
             return false;
         }
@@ -323,6 +333,9 @@ public abstract class ModuleEntrance extends XposedModule {
             // 带上下文消息的校验，缺键/类型不匹配时给出可诊断提示，而非裸 NPE。
             Objects.requireNonNull(classLoader,
                 "Hot update status missing or key mismatch: " + ModuleData.MODULE_HOST_CLASSLOADER);
+
+            // 回写默认 ClassLoader，使 handleHotReloaded 及后续 CoreTool 默认类加载 API 可用。
+            ModuleData.setClassLoader(classLoader);
 
             // 先解除旧 Hook，杜绝与新注册 Hook 的并存双执行窗口。
             unhookAll(oldHandles);

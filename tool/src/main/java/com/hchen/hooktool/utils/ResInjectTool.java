@@ -371,6 +371,8 @@ public final class ResInjectTool {
                 index *= STYLE_NUM_ENTRIES;
                 int[] data = (int[]) CoreTool.getField(getThisObject(), "mData");
                 if (data == null) return;
+                // 防御性越界校验：部分 ROM 的 TypedArray 实现或索引异常时避免 AIOOBE 中断替换逻辑
+                if (index < 0 || index >= data.length - STYLE_RESOURCE_ID - 1) return;
 
                 int type = data[index + STYLE_TYPE];
                 int id = data[index + STYLE_RESOURCE_ID];

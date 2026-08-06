@@ -239,11 +239,23 @@ public class XposedLog extends AbstractLog {
      * <p>
      * 回落保留调用者 {@code tag} 语义（经 {@link AndroidLog#output} 以 {@code [tag]} 嵌入消息）。
      * 首次回落会通过原生 {@link android.util.Log} 打印一次提示（不经 Xposed 路径，避免递归），
-     * 之后常驻回落避免重复异常构造。
+     * 之后常驻回落避免重复异常构造；当模块加载流程推进、Xposed 环境就绪
+     * （{@link ModuleData#isXposedEnvironment()} 恢复为 {@code true} 且代理可用）后，
+     * 回落状态会被清除，日志重新走 Xposed 通道。
      */
     @Override
     protected void log(int priority, String tag, String message, Throwable throwable) {
         if (fallbackUsed.get() || !ModuleData.isXposedEnvironment()) {
+            if (ModuleData.isXposedEnvironment()) {
+                // 环境已就绪但处于回落态：尝试重新走 Xposed 通道，成功则解除回落。
+                try {
+                    ModuleData.getWrapper().log(priority, tag, message, throwable);
+                    fallbackUsed.set(false);
+                    return;
+                } catch (Throwable t) {
+                    // 仍不可用，继续回落（不再重复打印提示）。
+                }
+            }
             AndroidLog.output(priority, tag, message, throwable);
             return;
         }
