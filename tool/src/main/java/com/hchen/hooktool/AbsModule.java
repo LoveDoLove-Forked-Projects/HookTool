@@ -70,7 +70,8 @@ public abstract class AbsModule extends CoreTool {
     /**
      * 当前实例的日志标签，取值为子类的简单类名，用于标识日志来源。
      */
-    protected final String TAG = getClass().getSimpleName();
+    @NonNull
+    protected final String tag = getClass().getSimpleName();
 
     /**
      * 模块生命周期阶段枚举，用于标识当前回调所处的处理节点。
@@ -187,6 +188,7 @@ public abstract class AbsModule extends CoreTool {
      *               （当通过应用更新触发热更新或未传递额外数据时）
      * @return 需要保存的状态键值对；若无需保存则返回空 {@link HashMap}
      */
+    @NonNull
     protected Map<String, Object> onHotReloading(@Nullable Bundle extras) {
         return new HashMap<>();
     }
@@ -252,7 +254,7 @@ public abstract class AbsModule extends CoreTool {
                 onThrow(stage, e);
             } catch (Throwable onThrowError) {
                 // onThrow 覆写抛出的异常被记录并忽略，确保原始异常继续传播，不覆盖异常链
-                XposedLog.logW(TAG, "onThrow() threw an exception, ignored to preserve the original exception.", onThrowError);
+                XposedLog.logW(tag, "onThrow() threw an exception, ignored to preserve the original exception.", onThrowError);
             }
             CoreTool.throwIt(e);
         }
@@ -354,7 +356,7 @@ public abstract class AbsModule extends CoreTool {
                 onThrow(StageEnum.HOT_RELOADING, e);
             } catch (Throwable onThrowError) {
                 // onThrow 覆写抛出的异常被记录并忽略，确保原始异常继续传播，不覆盖异常链
-                XposedLog.logW(TAG, "onThrow() threw an exception, ignored to preserve the original exception.", onThrowError);
+                XposedLog.logW(tag, "onThrow() threw an exception, ignored to preserve the original exception.", onThrowError);
             }
             CoreTool.throwIt(e);
             return new HashMap<>();

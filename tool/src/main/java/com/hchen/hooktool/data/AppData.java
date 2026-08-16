@@ -46,6 +46,7 @@ public class AppData implements Parcelable {
      * 与该应用关联的 {@link PackageInfo} 对象，其中包含完整的包级别元数据信息。
      * 仅当输入为 {@link PackageInfo} 类型时才会被填充，其余输入类型下恒为 {@code null}。
      */
+    @Nullable
     public PackageInfo packageInfo;
     /**
      * 与该应用关联的 {@link ApplicationInfo} 对象，记录应用级别的配置与属性。
@@ -78,11 +79,12 @@ public class AppData implements Parcelable {
      */
     public String packageName;
     /**
-     * 应用的版本名称字符串（例如 {@code "1.2.3"}）。仅当通过 {@link PackageInfo} 获取数据时才会被填充。
+     * 应用的版本名称字符串（例如 {@code "1.2.3"}）。同 {@link #packageInfo}，仅当通过
+     * {@link PackageInfo} 获取数据时才会被填充。
      */
     public String versionName;
     /**
-     * 应用的版本号字符串。仅当通过 {@link PackageInfo} 获取数据时才会被填充。
+     * 应用的版本号字符串。同 {@link #packageInfo}，仅当通过 {@link PackageInfo} 获取数据时才会被填充。
      */
     public String versionCode;
     /**

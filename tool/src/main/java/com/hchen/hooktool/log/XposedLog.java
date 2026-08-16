@@ -18,8 +18,6 @@
  */
 package com.hchen.hooktool.log;
 
-import android.util.Log;
-
 import com.hchen.hooktool.ModuleConfig;
 import com.hchen.hooktool.ModuleData;
 
@@ -35,6 +33,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 输出逻辑复用 {@link AbstractLog} 的等级门控与消息格式化。当当前环境不满足
  * Xposed 输出条件（未处于 Xposed 环境，或获取日志代理失败）时，自动回落至
  * {@link AndroidLog} 输出，避免崩溃与日志静默丢失。
+ * <p>
+ * 公开门面与 {@link AndroidLog} 一致：四个级别（{@code logE/logW/logI/logD}）各提供
+ * {@code (tag, log)}、{@code (tag, Throwable)} 与 {@code (tag, log, Throwable)} 三个重载。
  *
  * @author 焕晨HChen
  * @see AbstractLog
@@ -42,9 +43,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @see ModuleData#getWrapper()
  */
 public class XposedLog extends AbstractLog {
-    /** 本类输出目标单例，供静态门面委托。 */
+    /**
+     * 本类输出目标单例，供静态门面委托。
+     */
     private static final AbstractLog IMPL = new XposedLog();
-    /** 标记是否已发生回落，保证回落提示仅输出一次。 */
+    /**
+     * 标记是否已发生回落，保证回落提示仅输出一次。
+     */
     private static final AtomicBoolean fallbackUsed = new AtomicBoolean(false);
 
     protected XposedLog() {
@@ -57,11 +62,11 @@ public class XposedLog extends AbstractLog {
      * <p>
      * 当全局日志等级低于 {@link ModuleConfig#LOG_E} 时，此调用将被静默跳过。
      *
-     * @param tag 业务侧自定义标识，将传递给 Xposed 日志代理
-     * @param log 待输出的日志正文
+     * @param tag     业务侧自定义标识，将传递给 Xposed 日志代理
+     * @param message 待输出的日志正文
      */
-    public static void logE(String tag, String log) {
-        logAt(IMPL, ModuleConfig.LOG_E, tag, log, null, null);
+    public static void logE(String tag, String message) {
+        logAt(IMPL, ModuleConfig.LOG_E, tag, message, null);
     }
 
     /**
@@ -71,29 +76,18 @@ public class XposedLog extends AbstractLog {
      * @param e   待记录的异常实例
      */
     public static void logE(String tag, Throwable e) {
-        logAt(IMPL, ModuleConfig.LOG_E, tag, null, null, e);
-    }
-
-    /**
-     * 以 ERROR 级别输出一条附带调用栈字符串的日志至 Xposed 运行时日志系统。
-     *
-     * @param tag        业务侧自定义标识
-     * @param log        待输出的日志正文
-     * @param stackTrace 以字符串形式提供的调用栈信息，将追加到消息末尾
-     */
-    public static void logE(String tag, String log, String stackTrace) {
-        logAt(IMPL, ModuleConfig.LOG_E, tag, log, stackTrace, null);
+        logAt(IMPL, ModuleConfig.LOG_E, tag, null, e);
     }
 
     /**
      * 以 ERROR 级别输出一条同时包含文本描述和异常信息的日志至 Xposed 运行时日志系统。
      *
-     * @param tag 业务侧自定义标识
-     * @param log 待输出的日志正文
-     * @param e   待记录的异常实例
+     * @param tag     业务侧自定义标识，将传递给 Xposed 日志代理
+     * @param message 待输出的日志正文
+     * @param e       待记录的异常实例
      */
-    public static void logE(String tag, String log, Throwable e) {
-        logAt(IMPL, ModuleConfig.LOG_E, tag, log, null, e);
+    public static void logE(String tag, String message, Throwable e) {
+        logAt(IMPL, ModuleConfig.LOG_E, tag, message, e);
     }
 
     // ----------- logW --------------
@@ -103,11 +97,11 @@ public class XposedLog extends AbstractLog {
      * <p>
      * 当全局日志等级低于 {@link ModuleConfig#LOG_W} 时，此调用将被静默跳过。
      *
-     * @param tag 业务侧自定义标识
-     * @param log 待输出的日志正文
+     * @param tag     业务侧自定义标识，将传递给 Xposed 日志代理
+     * @param message 待输出的日志正文
      */
-    public static void logW(String tag, String log) {
-        logAt(IMPL, ModuleConfig.LOG_W, tag, log, null, null);
+    public static void logW(String tag, String message) {
+        logAt(IMPL, ModuleConfig.LOG_W, tag, message, null);
     }
 
     /**
@@ -117,29 +111,18 @@ public class XposedLog extends AbstractLog {
      * @param e   待记录的异常实例
      */
     public static void logW(String tag, Throwable e) {
-        logAt(IMPL, ModuleConfig.LOG_W, tag, null, null, e);
-    }
-
-    /**
-     * 以 WARN 级别输出一条附带调用栈字符串的日志至 Xposed 运行时日志系统。
-     *
-     * @param tag        业务侧自定义标识
-     * @param log        待输出的日志正文
-     * @param stackTrace 以字符串形式提供的调用栈信息
-     */
-    public static void logW(String tag, String log, String stackTrace) {
-        logAt(IMPL, ModuleConfig.LOG_W, tag, log, stackTrace, null);
+        logAt(IMPL, ModuleConfig.LOG_W, tag, null, e);
     }
 
     /**
      * 以 WARN 级别输出一条同时包含文本描述和异常信息的日志至 Xposed 运行时日志系统。
      *
-     * @param tag 业务侧自定义标识
-     * @param log 待输出的日志正文
-     * @param e   待记录的异常实例
+     * @param tag     业务侧自定义标识，将传递给 Xposed 日志代理
+     * @param message 待输出的日志正文
+     * @param e       待记录的异常实例
      */
-    public static void logW(String tag, String log, Throwable e) {
-        logAt(IMPL, ModuleConfig.LOG_W, tag, log, null, e);
+    public static void logW(String tag, String message, Throwable e) {
+        logAt(IMPL, ModuleConfig.LOG_W, tag, message, e);
     }
 
     // ----------- logI --------------
@@ -149,22 +132,11 @@ public class XposedLog extends AbstractLog {
      * <p>
      * 当全局日志等级低于 {@link ModuleConfig#LOG_I} 时，此调用将被静默跳过。
      *
-     * @param tag 业务侧自定义标识
-     * @param log 待输出的日志正文
+     * @param tag     业务侧自定义标识，将传递给 Xposed 日志代理
+     * @param message 待输出的日志正文
      */
-    public static void logI(String tag, String log) {
-        logAt(IMPL, ModuleConfig.LOG_I, tag, log, null, null);
-    }
-
-    /**
-     * 以 INFO 级别输出一条附带调用栈字符串的日志至 Xposed 运行时日志系统。
-     *
-     * @param tag        业务侧自定义标识
-     * @param log        待输出的日志正文
-     * @param stackTrace 以字符串形式提供的调用栈信息
-     */
-    public static void logI(String tag, String log, String stackTrace) {
-        logAt(IMPL, ModuleConfig.LOG_I, tag, log, stackTrace, null);
+    public static void logI(String tag, String message) {
+        logAt(IMPL, ModuleConfig.LOG_I, tag, message, null);
     }
 
     /**
@@ -174,18 +146,18 @@ public class XposedLog extends AbstractLog {
      * @param e   待记录的异常实例
      */
     public static void logI(String tag, Throwable e) {
-        logAt(IMPL, ModuleConfig.LOG_I, tag, null, null, e);
+        logAt(IMPL, ModuleConfig.LOG_I, tag, null, e);
     }
 
     /**
      * 以 INFO 级别输出一条同时包含文本描述和异常信息的日志至 Xposed 运行时日志系统。
      *
-     * @param tag 业务侧自定义标识
-     * @param log 待输出的日志正文
-     * @param e   待记录的异常实例
+     * @param tag     业务侧自定义标识，将传递给 Xposed 日志代理
+     * @param message 待输出的日志正文
+     * @param e       待记录的异常实例
      */
-    public static void logI(String tag, String log, Throwable e) {
-        logAt(IMPL, ModuleConfig.LOG_I, tag, log, null, e);
+    public static void logI(String tag, String message, Throwable e) {
+        logAt(IMPL, ModuleConfig.LOG_I, tag, message, e);
     }
 
     // ------------ logD --------------
@@ -195,11 +167,11 @@ public class XposedLog extends AbstractLog {
      * <p>
      * 当全局日志等级低于 {@link ModuleConfig#LOG_D} 时，此调用将被静默跳过。
      *
-     * @param tag 业务侧自定义标识
-     * @param log 待输出的日志正文
+     * @param tag     业务侧自定义标识，将传递给 Xposed 日志代理
+     * @param message 待输出的日志正文
      */
-    public static void logD(String tag, String log) {
-        logAt(IMPL, ModuleConfig.LOG_D, tag, log, null, null);
+    public static void logD(String tag, String message) {
+        logAt(IMPL, ModuleConfig.LOG_D, tag, message, null);
     }
 
     /**
@@ -209,29 +181,18 @@ public class XposedLog extends AbstractLog {
      * @param e   待记录的异常实例
      */
     public static void logD(String tag, Throwable e) {
-        logAt(IMPL, ModuleConfig.LOG_D, tag, null, null, e);
-    }
-
-    /**
-     * 以 DEBUG 级别输出一条附带调用栈字符串的日志至 Xposed 运行时日志系统。
-     *
-     * @param tag        业务侧自定义标识
-     * @param log        待输出的日志正文
-     * @param stackTrace 以字符串形式提供的调用栈信息
-     */
-    public static void logD(String tag, String log, String stackTrace) {
-        logAt(IMPL, ModuleConfig.LOG_D, tag, log, stackTrace, null);
+        logAt(IMPL, ModuleConfig.LOG_D, tag, null, e);
     }
 
     /**
      * 以 DEBUG 级别输出一条同时包含文本描述和异常信息的日志至 Xposed 运行时日志系统。
      *
-     * @param tag 业务侧自定义标识
-     * @param log 待输出的日志正文
-     * @param e   待记录的异常实例
+     * @param tag     业务侧自定义标识，将传递给 Xposed 日志代理
+     * @param message 待输出的日志正文
+     * @param e       待记录的异常实例
      */
-    public static void logD(String tag, String log, Throwable e) {
-        logAt(IMPL, ModuleConfig.LOG_D, tag, log, null, e);
+    public static void logD(String tag, String message, Throwable e) {
+        logAt(IMPL, ModuleConfig.LOG_D, tag, message, e);
     }
 
     /**
@@ -240,7 +201,7 @@ public class XposedLog extends AbstractLog {
      * 回落保留调用者 {@code tag} 语义（经 {@link AndroidLog#output} 以 {@code [tag]} 嵌入消息）。
      * 首次回落会通过原生 {@link android.util.Log} 打印一次提示（不经 Xposed 路径，避免递归），
      * 之后常驻回落避免重复异常构造；当模块加载流程推进、Xposed 环境就绪
-     * （{@link ModuleData#isXposedEnvironment()} 恢复为 {@code true} 且代理可用）后，
+     * （{@link ModuleData#isXposedEnvironment()} 为 {@code true} 且代理可用）后，
      * 回落状态会被清除，日志重新走 Xposed 通道。
      */
     @Override
@@ -253,7 +214,8 @@ public class XposedLog extends AbstractLog {
                     fallbackUsed.set(false);
                     return;
                 } catch (Throwable t) {
-                    // 仍不可用，继续回落（不再重复打印提示）。
+                    // 仍不可用，继续回落（不再重复打印提示）；保留 D 级痕迹便于排查持续回落。
+                    AndroidLog.logD("XposedLog", "Xposed log proxy still unavailable, staying on fallback.", t);
                 }
             }
             AndroidLog.output(priority, tag, message, throwable);
@@ -274,8 +236,7 @@ public class XposedLog extends AbstractLog {
      */
     private static void markFallback(Throwable t) {
         if (fallbackUsed.compareAndSet(false, true)) {
-            Log.w(ModuleConfig.getLogTag(),
-                "[XposedLog] Falling back to AndroidLog: " + t);
+            AndroidLog.logW("XposedLog", "Falling back to AndroidLog.", t);
         }
     }
 }

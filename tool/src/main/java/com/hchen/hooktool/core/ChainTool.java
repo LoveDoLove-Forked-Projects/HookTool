@@ -24,7 +24,6 @@ import androidx.annotation.NonNull;
 
 import com.hchen.hooktool.data.ChainData;
 import com.hchen.hooktool.data.ChainType;
-import com.hchen.hooktool.exception.UnexpectedException;
 import com.hchen.hooktool.hook.AbsHook;
 
 import java.lang.reflect.Executable;
@@ -69,7 +68,7 @@ public final class ChainTool {
     /**
      * 已成功执行的链式数据标识集合，用于运行时去重，防止对相同目标重复 Hook。
      */
-    private final HashSet<String> dataHashSet = new HashSet<>();
+    private final HashSet<String> executedKeys = new HashSet<>();
 
     /**
      * 以指定的目标类初始化链式工具实例。
@@ -178,6 +177,7 @@ public final class ChainTool {
      * @return {@link ChainHook} 实例，用于配置具体的 Hook 行为
      */
     public ChainHook withExecutable(@NonNull Executable executable) {
+        Objects.requireNonNull(executable, "Executable must not be null.");
         this.chainData = new ChainData(executable);
         return chainHook;
     }
@@ -186,40 +186,42 @@ public final class ChainTool {
      * 执行完整的链式 Hook 流程：先查找目标方法或构造函数，随后对其应用 Hook。
      * <p>
      * 本方法内置去重机制——若检测到当前链式数据已在先前被处理过，将抛出
-     * {@link UnexpectedException}。执行完毕后会自动将 {@code chainData} 置为 {@code null}，
+     * {@link IllegalStateException}。执行完毕后会自动将 {@code chainData} 置为 {@code null}，
      * 以避免被意外复用。
      *
-     * @throws UnexpectedException 当检测到重复的链式数据时抛出
+     * @throws IllegalStateException 当检测到重复的链式数据时抛出
      */
     private void runChain() {
         Objects.requireNonNull(chainData, "chainData is null; do not reuse ChainHook after hook().");
 
         try {
             String chainKey = chainKey(chainData);
-            if (!dataHashSet.contains(chainKey)) {
-                runFind();
-                if (chainData.throwable != null) {
-                    if (chainData.isIgnoreThrow) {
+            if (executedKeys.contains(chainKey)) {
+                throw new IllegalStateException("Duplicate chain data: " + chainData);
+            }
+            runFind();
+            if (chainData.throwable != null) {
+                if (chainData.isIgnoreThrow) {
+                    return;
+                }
+                if (chainData.function != null) {
+                    if (Boolean.TRUE.equals(chainData.function.apply(chainData.throwable))) {
                         return;
-                    }
-                    if (chainData.function != null) {
-                        if (Boolean.TRUE.equals(chainData.function.apply(chainData.throwable))) {
-                            return;
-                        } else {
-                            CoreTool.throwIt(chainData.throwable);
-                        }
                     } else {
                         CoreTool.throwIt(chainData.throwable);
                     }
+                } else {
+                    CoreTool.throwIt(chainData.throwable);
                 }
-
-                dataHashSet.add(chainKey);
-                for (Executable executable : chainData.executables) {
-                    CoreTool.hook(executable, chainData.absHook);
-                }
-            } else {
-                throw new UnexpectedException("Duplicate chain data: " + chainData);
             }
+
+            if (chainData.executables == null || chainData.executables.length == 0) {
+                return;
+            }
+            for (Executable executable : chainData.executables) {
+                CoreTool.hook(executable, chainData.absHook);
+            }
+            executedKeys.add(chainKey);
         } finally {
             chainData = null;
         }

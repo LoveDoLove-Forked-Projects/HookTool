@@ -233,16 +233,22 @@ public abstract class ModuleEntrance extends XposedModule {
     }
 
     // ------------------------- Inner -----------------------------
+
+    /**
+     * 框架回调入口：模块加载完成。初始化 Xposed 环境与包装器、模块配置后分发业务回调。
+     */
     @Override
     public final void onModuleLoaded(@NonNull ModuleLoadedParam param) {
         processName = param.getProcessName();
-        ModuleData.setXposedEnvironment(true);
         ModuleData.setWrapper(this);
 
         initModuleConfig();
         handleModuleLoaded(param);
     }
 
+    /**
+     * 框架回调入口：目标应用包加载完成。按忽略列表过滤后记录目标包名并分发业务回调。
+     */
     @Override
     public final void onPackageLoaded(@NonNull PackageLoadedParam param) {
         String[] ignored = ignorePackages();
@@ -262,6 +268,9 @@ public abstract class ModuleEntrance extends XposedModule {
         handlePackageLoaded(param);
     }
 
+    /**
+     * 框架回调入口：目标应用包资源就绪。挂接 Application.attach 钩子后分发业务回调。
+     */
     @Override
     public final void onPackageReady(@NonNull PackageReadyParam param) {
         if (shouldSkip) {
@@ -272,11 +281,18 @@ public abstract class ModuleEntrance extends XposedModule {
         handlePackageReady(param);
     }
 
+    /**
+     * 框架回调入口：系统服务进程启动。直接分发业务回调。
+     */
     @Override
     public final void onSystemServerStarting(@NonNull SystemServerStartingParam param) {
         handleSystemServerStarting(param);
     }
 
+    /**
+     * 框架回调入口：热更新准备阶段（旧代码执行）。收集状态并提交，允许/拒绝由
+     * {@link #isHotReloadingAllowed(String)} 决定；状态保存成功后才清空注册表。
+     */
     @Override
     public final boolean onHotReloading(@NonNull HotReloadingParam param) {
         try {
@@ -289,13 +305,25 @@ public abstract class ModuleEntrance extends XposedModule {
             ClassLoader classLoader = ModuleData.getClassLoader();
 
             Map<String, Object> merged = new HashMap<>();
+            Map<String, Object> moduleState = handleHotReloading(param.getExtras());
+            Map<String, Object> hookState = HookRegistry.reloading(param.getExtras()); // 不再内部清空注册表
 
-            merged.putAll(handleHotReloading(param.getExtras()));
-            merged.putAll(HookRegistry.reloading(param.getExtras())); // 不再内部清空注册表
+            // 跨来源键冲突检测：hook 级状态后合并，同键时覆盖模块级状态并记录告警。
+            for (String key : hookState.keySet()) {
+                if (moduleState.containsKey(key)) {
+                    AndroidLog.logW("ModuleEntrance",
+                        "Hot reload state key collision, hook state overrides module state: " + key);
+                }
+            }
+            merged.putAll(moduleState);
+            merged.putAll(hookState);
+            // 框架保留键最后写入，优先级最高。
             merged.put(ModuleData.MODULE_HOST_CLASSLOADER, classLoader);
 
             param.setSavedInstanceState(merged);
             // 仅在状态保存成功后清空，热更新被拒绝时旧 hook 注册信息得以保留。
+            // 已知限制：若框架在 setSavedInstanceState 后的重载操作失败（旧代码继续运行），
+            // 注册表已清空而旧 hook 仍活跃且失联，二次热更新会丢失 hook 级状态。
             HookRegistry.clear();
             return true;
         } catch (Throwable throwable) {
@@ -311,12 +339,15 @@ public abstract class ModuleEntrance extends XposedModule {
         }
     }
 
+    /**
+     * 框架回调入口：热更新完成（新代码执行）。恢复 ClassLoader 与配置，先解除旧 Hook
+     * 再分发状态恢复，finally 幂等兜底解除。
+     */
     @Override
     public final void onHotReloaded(@NonNull HotReloadedParam param) {
         List<HookHandle> oldHandles = param.getOldHookHandles(); // 预取，供先解除与 finally 兜底复用
         try {
             processName = param.getProcessName();
-            ModuleData.setXposedEnvironment(true);
             ModuleData.setWrapper(this);
 
             initModuleConfig();
@@ -378,7 +409,7 @@ public abstract class ModuleEntrance extends XposedModule {
                             @Override
                             public void before() {
                                 Context context = (Context) getArg(0);
-                                Objects.requireNonNull(context);
+                                Objects.requireNonNull(context, "Application.attach context must not be null.");
                                 handleApplicationCreated(context);
                             }
                         }

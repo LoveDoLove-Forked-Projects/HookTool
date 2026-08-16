@@ -75,10 +75,10 @@ public interface IExecListener {
     /**
      * Shell 管道破裂的回调方法。
      * <p>
-     * 仅在 Shell 进程<strong>异常死亡</strong>时触发一次（如 shell 崩溃、被外部杀死、
-     * 或底层通信异常），正常的 {@code close()} 关闭不会触发。
-     * 回调触发后框架会自动关闭内部进程流，且<strong>不会自动重建</strong>；
-     * 调用方需要重新通过 {@code ShellTool.obtain()} 显式恢复。
+     * 在以下两种场景触发一次：Shell 进程<strong>异常死亡</strong>（崩溃、被外部杀死、底层通信异常）；
+     * 或进程仍存活但标准流已终止（如命令执行 {@code exec >/dev/null} 重定向导致会话失效）。
+     * 正常的 {@code close()} 关闭不会触发。回调触发后框架会自动关闭内部进程流，且
+     * <strong>不会自动重建</strong>；调用方需要重新通过 {@code ShellTool.obtain()} 显式恢复。
      *
      * @param reason 管道破裂的原因描述文本，不为 {@code null}
      * @param errors 管道破裂时附带的错误输出内容数组，不为 {@code null}

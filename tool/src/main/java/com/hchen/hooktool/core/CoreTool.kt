@@ -52,7 +52,6 @@ import com.hchen.hooktool.core.CoreTool.Companion.setField
 import com.hchen.hooktool.core.CoreTool.Companion.setResReplacement
 import com.hchen.hooktool.core.CoreTool.Companion.setStaticField
 import com.hchen.hooktool.core.CoreTool.Companion.timeConsumption
-import com.hchen.hooktool.exception.UnexpectedException
 import com.hchen.hooktool.helper.CoreHelper
 import com.hchen.hooktool.hook.AbsHook
 import com.hchen.hooktool.hook.HookBridge
@@ -359,14 +358,11 @@ open class CoreTool : XposedLog() {
         /**
          * 获取指定类中与给定名称匹配的方法（使用默认 ClassLoader）。
          *
-         * 此重载供 Java 调用方使用，等价于 `findAllMethod(defaultClassLoader, methodName)`。
-         *
          * @param methodName 用以过滤的方法名称。
          * @return 匹配条件的 [Method] 数组。
          */
         @JvmStatic
-        @JvmName("findAllMethod")
-        fun String.findAllMethodByName(
+        fun String.findAllMethod(
             methodName: String
         ): Array<Method> {
             return this.findClass().findAllMethod(methodName)
@@ -666,15 +662,12 @@ open class CoreTool : XposedLog() {
             return if (parameterTypes.isEmpty()) {
                 CoreHelper.callMethod(this, methodName, *args)
             } else {
-                CoreHelper.callMethod(this, methodName, parameterTypes, *args)
+                CoreHelper.callMethod(this, methodName, parameterTypes as Array<Class<*>?>, *args)
             }
         }
 
         /**
          * 尝试通过反射在当前对象上调用指定名称的实例方法，若方法不存在则返回 `null`。
-         * <p>
-         * 未显式提供参数类型时，按实际参数值推断目标方法（与 {@code callMethod} 的空参
-         * 语义一致），而非零参精确匹配——避免误将「存在待匹配的有参方法」判定为不存在。
          *
          * @param methodName 待调用的方法名称。
          * @param parameterTypes 方法的参数类型数组，默认为空数组时由框架自动推断。
@@ -689,7 +682,11 @@ open class CoreTool : XposedLog() {
             vararg args: Any?
         ): Any? {
             val method = if (parameterTypes.isEmpty()) {
-                CoreHelper.findMethodBestMatch(this.javaClass, methodName, *args)
+                try {
+                    CoreHelper.findMethodBestMatch(this.javaClass, methodName, *args)
+                } catch (e: NoSuchMethodError) {
+                    return null
+                }
             } else {
                 this.javaClass.findMethodIfExists(methodName, *parameterTypes)
             } ?: return null
@@ -897,7 +894,7 @@ open class CoreTool : XposedLog() {
             return if (parameterTypes.isEmpty()) {
                 CoreHelper.newInstance(this, *args)
             } else {
-                CoreHelper.newInstance(this, parameterTypes, *args)
+                CoreHelper.newInstance(this, parameterTypes as Array<Class<*>?>, *args)
             }
         }
 
@@ -966,7 +963,7 @@ open class CoreTool : XposedLog() {
             return if (parameterTypes.isEmpty()) {
                 CoreHelper.callStaticMethod(this, methodName, *args)
             } else {
-                CoreHelper.callStaticMethod(this, methodName, parameterTypes, *args)
+                CoreHelper.callStaticMethod(this, methodName, parameterTypes as Array<Class<*>?>, *args)
             }
         }
 
@@ -1000,7 +997,11 @@ open class CoreTool : XposedLog() {
             vararg args: Any?
         ): Any? {
             val method = if (parameterTypes.isEmpty()) {
-                this.findMethodIfExists(methodName)
+                try {
+                    CoreHelper.findMethodBestMatch(this, methodName, *args)
+                } catch (e: NoSuchMethodError) {
+                    return null
+                }
             } else {
                 this.findMethodIfExists(methodName, *parameterTypes)
             } ?: return null
@@ -1350,7 +1351,7 @@ open class CoreTool : XposedLog() {
             methodName: String,
             vararg parameterTypes: Any
         ): XposedInterface.HookHandle? {
-            return this.findClassIfExists(classLoader)?.hookMethod(methodName, *parameterTypes)
+            return this.findClassIfExists(classLoader)?.hookMethodIfExists(methodName, *parameterTypes)
         }
 
         /**
@@ -1451,7 +1452,7 @@ open class CoreTool : XposedLog() {
             classLoader: ClassLoader?,
             vararg parameterTypes: Any
         ): XposedInterface.HookHandle? {
-            return this.findClassIfExists(classLoader)?.hookConstructor(*parameterTypes)
+            return this.findClassIfExists(classLoader)?.hookConstructorIfExists(*parameterTypes)
         }
 
         /**
@@ -1858,13 +1859,10 @@ open class CoreTool : XposedLog() {
         /**
          * 批量反优化指定类中与给定名称匹配的方法（使用默认 ClassLoader）。
          *
-         * 此重载供 Java 调用方使用，等价于 `deoptimizeAllMethod(defaultClassLoader, methodName)`。
-         *
          * @param methodName 用以过滤的方法名称。
          */
         @JvmStatic
-        @JvmName("deoptimizeAllMethod")
-        fun String.deoptimizeAllMethodByName(
+        fun String.deoptimizeAllMethod(
             methodName: String
         ) {
             this.findClass().findAllMethod(methodName).deoptimizeAll()
@@ -2093,20 +2091,16 @@ open class CoreTool : XposedLog() {
          * 测量指定代码块的执行耗时。
          *
          * @param runnable 待测量执行时间的代码块。
-         * @return 执行耗时（单位：毫秒）；若执行过程中发生异常则返回 `-1`。
+         * @return 执行耗时（单位：毫秒）；{@code runnable} 抛出的异常会原样上抛，不在此处吞掉。
          */
         @JvmStatic
         fun timeConsumption(
             runnable: Runnable
         ): Long {
-            try {
-                val start = Instant.now()
-                runnable.run()
-                val end = Instant.now()
-                return Duration.between(start, end).toMillis()
-            } catch (_: Throwable) {
-                return -1L
-            }
+            val start = Instant.now()
+            runnable.run()
+            val end = Instant.now()
+            return Duration.between(start, end).toMillis()
         }
 
         /**

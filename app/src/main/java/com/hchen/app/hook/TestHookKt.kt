@@ -19,7 +19,6 @@
 package com.hchen.app.hook
 
 import android.annotation.SuppressLint
-import android.content.Context
 import android.os.Bundle
 import com.hchen.hooktool.AbsModule
 import com.hchen.hooktool.hook.AbsHook
@@ -34,25 +33,23 @@ import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
  *
  * 开发者应覆写 [onPackageReady] 方法以注册 Hook 逻辑。
  *
+ * @author 焕晨HChen
  * @see AbsModule
  */
 class TestHookKt : AbsModule() {
-    private var context: Context? = null
-
+    /**
+     * 包就绪回调：注册示例 Hook。
+     */
     @SuppressLint("XposedNewApi")
     override fun onPackageReady(param: PackageReadyParam) {
         registerHooks()
     }
 
+    /**
+     * 热更新完成回调：重新注册 Hook（旧句柄已由框架解除）。
+     */
     @SuppressLint("XposedNewApi")
     override fun onHotReloaded(param: HotReloadedParam) {
-        val savedState = param.savedInstanceState
-        if (savedState is Map<*, *>) {
-            val savedContext = savedState["CONTEXT"]
-            if (savedContext is Context) {
-                context = savedContext
-            }
-        }
         registerHooks()
     }
 
@@ -62,8 +59,6 @@ class TestHookKt : AbsModule() {
             "test",
             String::class.java,
             object : AbsHook() {
-                private var context: Context? = null
-
                 /**
                  * 前置拦截回调，在目标方法执行之前调用。
                  */
@@ -102,17 +97,7 @@ class TestHookKt : AbsModule() {
                 }
 
                 /**
-                 * 热重载准备回调，返回需要保存的内部状态。
-                 *
-                 * @param extras 热重载附加数据
-                 * @return 需保存的状态键值对
-                 */
-                override fun onHotReloading(extras: Bundle?, state: MutableMap<String, Any?>) {
-                    state["CONTEXT_INNER"] = context
-                }
-
-                /**
-                 * 热重载完成回调，恢复之前保存的状态。
+                 * 热重载完成回调，恢复之前保存的状态（本示例仅恢复 thisObject 字段）。
                  *
                  * @param thisObject 该实例最新的宿主对象实例，
                  *                   可能为 `null`（静态方法或 key 未设置时）
@@ -120,10 +105,6 @@ class TestHookKt : AbsModule() {
                  */
                 override fun onHotReloaded(thisObject: Any?, inState: MutableMap<String, Any?>) {
                     super.onHotReloaded(thisObject, inState)
-                    val savedContext = inState["CONTEXT_INNER"]
-                    if (savedContext is Context) {
-                        context = savedContext
-                    }
                     thisObject?.setField("test", true)
                 }
             }
@@ -134,13 +115,12 @@ class TestHookKt : AbsModule() {
      * 模块级热重载准备回调。
      * <p>
      * 在此保存需要在热重载后恢复的模块级状态数据。
+     * 本示例无模块级状态需要保存，返回空映射以演示 API 用法。
      *
      * @param extras 热重载附加数据，可能为 `null`
      * @return 模块级状态键值对
      */
     override fun onHotReloading(extras: Bundle?): MutableMap<String, Any?> {
-        val map = java.util.HashMap<String, Any?>()
-        map["CONTEXT"] = context
-        return map
+        return mutableMapOf()
     }
 }

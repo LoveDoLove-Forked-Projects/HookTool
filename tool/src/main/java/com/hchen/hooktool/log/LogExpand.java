@@ -51,19 +51,21 @@ public final class LogExpand {
     private LogExpand() {
     }
 
-    /** 日志增强路径配置快照，用于检测配置变更并失效 TAG 缓存。 */
+    /**
+     * 日志增强路径配置快照，用于检测配置变更并失效 TAG 缓存。
+     */
     private static volatile String[] cachedPaths = new String[0];
-    /** 日志增强忽略类名配置快照。 */
+    /**
+     * 日志增强忽略类名配置快照。
+     */
     private static volatile String[] cachedIgnores = new String[0];
-    /** TAG 解析结果缓存：键为命中的栈帧全限定类名，值为解析出的标签。 */
+    /**
+     * TAG 解析结果缓存：键为命中的栈帧全限定类名，值为解析出的标签。
+     */
     private static final ConcurrentHashMap<String, String> TAG_CACHE = new ConcurrentHashMap<>();
 
     /**
      * 将指定异常的完整堆栈跟踪序列化为字符串。
-     * <p>
-     * 实现原理：通过 {@link StringWriter} 创建内存缓冲区，
-     * 配合 {@link PrintWriter} 调用 {@link Throwable#printStackTrace(PrintWriter)}
-     * 将堆栈输出重定向至字符串。
      *
      * @param e 待序列化的异常实例，不得为 {@code null}
      * @return 包含完整堆栈跟踪信息的字符串，保证不为 {@code null}

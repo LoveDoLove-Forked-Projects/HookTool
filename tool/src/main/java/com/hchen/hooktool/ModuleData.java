@@ -24,8 +24,6 @@ import android.os.ParcelFileDescriptor;
 
 import androidx.annotation.NonNull;
 
-import com.hchen.hooktool.exception.UnexpectedException;
-
 import java.io.FileNotFoundException;
 import java.util.Objects;
 
@@ -69,11 +67,14 @@ public final class ModuleData {
      * 设置 Xposed 接口包装器实例。
      * <p>
      * 包级私有方法，仅供框架内部调用，外部代码不应直接使用。
+     * 仅在 Xposed 环境下才会被调用，故此处同时把 Xposed 环境标识置为 {@code true}。
      *
      * @param wrapper Xposed 接口包装器实例，不可为 null
      */
     static void setWrapper(@NonNull XposedInterfaceWrapper wrapper) {
+        Objects.requireNonNull(wrapper, "Xposed wrapper must not be null.");
         ModuleData.wrapper = wrapper;
+        ModuleData.isXposedEnvironment = true;
     }
 
     /**
@@ -92,12 +93,12 @@ public final class ModuleData {
      * 获取当前的 Xposed 接口包装器实例。
      *
      * @return 已设置的 XposedInterfaceWrapper 实例
-     * @throws UnexpectedException 当前未处于 Xposed 运行环境时抛出
+     * @throws IllegalStateException 当前未处于 Xposed 运行环境时抛出
      */
     @NonNull
     public static XposedInterfaceWrapper getWrapper() {
         if (!isXposedEnvironment()) {
-            throw new UnexpectedException("Please call in the xposed environment.");
+            throw new IllegalStateException("Please call in the xposed environment.");
         }
 
         Objects.requireNonNull(wrapper);
@@ -220,13 +221,13 @@ public final class ModuleData {
      * 获取目标应用的类加载器。
      *
      * @return 目标应用的 ClassLoader 实例
-     * @throws UnexpectedException 类加载器尚未通过 {@link #setClassLoader(ClassLoader)} 设置时抛出
+     * @throws IllegalStateException 类加载器尚未通过 {@link #setClassLoader(ClassLoader)} 设置时抛出
      */
     @NonNull
     public static ClassLoader getClassLoader() {
         ClassLoader cl = classLoader;
         if (cl == null) {
-            throw new UnexpectedException("ClassLoader has not been set. Ensure ModuleData.setClassLoader() is called before use.");
+            throw new IllegalStateException("ClassLoader has not been set. Ensure ModuleData.setClassLoader() is called before use.");
         }
         return cl;
     }
@@ -242,23 +243,10 @@ public final class ModuleData {
     }
 
     /**
-     * 设置 Xposed 运行环境标识。
-     * <p>
-     * 包级私有方法，仅供框架内部调用，用于标记当前是否运行于 Xposed 环境。
-     *
-     * @param isXposedEnvironment {@code true} 表示处于 Xposed 环境，{@code false} 表示非 Xposed 环境
-     */
-    @SuppressWarnings("SameParameterValue")
-    static void setXposedEnvironment(boolean isXposedEnvironment) {
-        ModuleData.isXposedEnvironment = isXposedEnvironment;
-    }
-
-    /**
      * 判断当前是否运行在 Xposed 框架环境中。
      *
      * @return {@code true} 表示处于 Xposed 环境，{@code false} 表示不在 Xposed 环境
      */
-    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     public static boolean isXposedEnvironment() {
         return isXposedEnvironment;
     }

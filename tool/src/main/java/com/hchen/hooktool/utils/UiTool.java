@@ -33,6 +33,8 @@ import android.view.WindowManager;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.hchen.hooktool.log.AndroidLog;
+
 /**
  * Android UI 界面相关工具类。
  * <p>
@@ -52,6 +54,8 @@ import androidx.annotation.Nullable;
  * @author 焕晨HChen
  */
 public final class UiTool {
+    private static final String TAG = "UiTool";
+
     private UiTool() {
     }
 
@@ -62,7 +66,7 @@ public final class UiTool {
      * <p>
      * 基于 {@link #px2dpFloat} 的精确结果四舍五入取整，保证与 float 版本同源。
      *
-     * @param context 上下文对象，用于获取屏幕密度，不得为 {@code null}
+     * @param context 非空上下文，用于获取屏幕密度
      * @param pxValue 待转换的像素值
      * @return 对应的 dp 值
      */
@@ -75,7 +79,7 @@ public final class UiTool {
      * <p>
      * 基于 {@link #px2spFloat} 的精确结果四舍五入取整，保证与 float 版本同源。
      *
-     * @param context 上下文对象，用于获取字体缩放密度，不得为 {@code null}
+     * @param context 非空上下文，用于获取字体缩放密度
      * @param pxValue 待转换的像素值
      * @return 对应的 sp 值
      */
@@ -88,7 +92,7 @@ public final class UiTool {
      * <p>
      * 基于 {@link #dp2pxFloat} 的精确结果四舍五入取整，保证与 float 版本同源。
      *
-     * @param context 上下文对象，用于获取屏幕密度，不得为 {@code null}
+     * @param context 非空上下文，用于获取屏幕密度
      * @param dpValue 待转换的 dp 值
      * @return 对应的像素值
      */
@@ -101,7 +105,7 @@ public final class UiTool {
      * <p>
      * 基于 {@link #sp2pxFloat} 的精确结果四舍五入取整，保证与 float 版本同源。
      *
-     * @param context 上下文对象，用于获取字体缩放密度，不得为 {@code null}
+     * @param context 非空上下文，用于获取字体缩放密度
      * @param spValue 待转换的 sp 值
      * @return 对应的像素值
      */
@@ -114,7 +118,7 @@ public final class UiTool {
      * <p>
      * 内部经 {@link TypedValue#applyDimension} 计算，不四舍五入，适合需要精确浮点结果的场景。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @param dpValue 待转换的 dp 值
      * @return 对应的精确像素值
      */
@@ -125,7 +129,7 @@ public final class UiTool {
     /**
      * 将字体缩放无关像素值（sp）精确转换为像素值（px，float）。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @param spValue 待转换的 sp 值
      * @return 对应的精确像素值
      */
@@ -136,7 +140,7 @@ public final class UiTool {
     /**
      * 将像素值（px）精确转换为密度无关像素值（dp，float）。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @param pxValue 待转换的像素值
      * @return 对应的精确 dp 值
      */
@@ -151,7 +155,7 @@ public final class UiTool {
      * 其中 {@code density}（{@link DisplayMetrics#density}）与字体缩放因子（{@link Configuration#fontScale}）均非废弃，
      * 适配系统字体缩放（等效于 {@code TypedValue.deriveDimension}，但后者需 API 34）。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @param pxValue 待转换的像素值
      * @return 对应的精确 sp 值
      */
@@ -166,7 +170,7 @@ public final class UiTool {
     /**
      * 获取当前屏幕的显示密度因子（{@code density}，单位 dp 与 px 的换算系数）。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 屏幕密度因子（如 {@code 2.0f} 表示 xxhdpi）
      */
     public static float getDensity(@NonNull Context context) {
@@ -178,7 +182,7 @@ public final class UiTool {
      * <p>
      * 来自 {@link Configuration#fontScale}，反映系统字体缩放倍数。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 字体缩放因子
      */
     public static float getScaledDensity(@NonNull Context context) {
@@ -190,13 +194,14 @@ public final class UiTool {
      * <p>
      * 若发生异常，返回 {@link DisplayMetrics#DENSITY_DEFAULT}。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 屏幕密度值（单位：dpi）
      */
     public static int getScreenDensity(@NonNull Context context) {
         try {
             return context.getResources().getDisplayMetrics().densityDpi;
-        } catch (Throwable ignore) {
+        } catch (Throwable e) {
+            AndroidLog.logD(TAG, "getScreenDensity failed, returning DENSITY_DEFAULT.", e);
             return DisplayMetrics.DENSITY_DEFAULT;
         }
     }
@@ -204,7 +209,7 @@ public final class UiTool {
     /**
      * 获取屏幕物理宽度（单位：px），即屏幕最大可用尺寸的宽度。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 屏幕物理宽度（px）
      */
     public static int getScreenWidth(@NonNull Context context) {
@@ -214,7 +219,7 @@ public final class UiTool {
     /**
      * 获取屏幕物理高度（单位：px），即屏幕最大可用尺寸的高度。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 屏幕物理高度（px）
      */
     public static int getScreenHeight(@NonNull Context context) {
@@ -226,7 +231,7 @@ public final class UiTool {
      * <p>
      * 通过 {@code WindowManager#getMaximumWindowMetrics()} 获取屏幕最大可用尺寸，即全部应用窗口区域可用的最大矩形。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 包含宽度与高度的 {@link Point} 对象
      */
     @NonNull
@@ -248,7 +253,8 @@ public final class UiTool {
             point.x = bounds.width();
             point.y = bounds.height();
             return point;
-        } catch (Throwable ignore) {
+        } catch (Throwable e) {
+            AndroidLog.logD(TAG, "getMaximumScreenSize failed, returning (0, 0).", e);
             return new Point();
         }
     }
@@ -256,7 +262,7 @@ public final class UiTool {
     /**
      * 获取当前窗口的尺寸（单位：px）。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 包含当前窗口宽度（{@code x}）和高度（{@code y}）的 {@link Point} 对象
      */
     @NonNull
@@ -280,7 +286,8 @@ public final class UiTool {
             point.x = bounds.width();
             point.y = bounds.height();
             return point;
-        } catch (Throwable ignore) {
+        } catch (Throwable e) {
+            AndroidLog.logD(TAG, "getCurrentWindowSize failed, returning (0, 0).", e);
             return new Point();
         }
     }
@@ -288,7 +295,7 @@ public final class UiTool {
     /**
      * 从 {@link Context} 中获取 {@link WindowManager} 系统服务实例。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return {@link WindowManager} 实例；系统服务不可用时可能返回 {@code null}
      */
     @Nullable
@@ -301,10 +308,8 @@ public final class UiTool {
      * 获取当前设备的 {@link Display} 对象。
      * <p>
      * 使用 {@link Context#getDisplay()} 获取当前应用关联的 {@code Display}。
-     * 注意：{@code Context#getDisplay()} 仅对 Activity 等窗口上下文返回非 {@code null}，
-     * 对 Application / Service 等非窗口上下文可能返回 {@code null}，调用方需自行判空。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 当前窗口关联的 {@link Display} 实例，可能为 {@code null}
      */
     @Nullable
@@ -319,7 +324,7 @@ public final class UiTool {
      * <p>
      * 通过系统资源 {@code status_bar_height} 读取，兼容 API 26 及以上。资源不存在时返回 {@code 0}。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 状态栏高度（px）
      */
     public static int getStatusBarHeight(@NonNull Context context) {
@@ -333,7 +338,7 @@ public final class UiTool {
      * 注意：该方案基于系统资源，<strong>手势导航模式下可能仍返回非 0 的系统导航栏资源高度</strong>，
      * 若需精确判断当前是否为手势导航，建议配合 {@code WindowInsets} 方案。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 导航栏高度（px）
      */
     public static int getNavigationBarHeight(@NonNull Context context) {
@@ -354,7 +359,7 @@ public final class UiTool {
     /**
      * 判断当前系统是否处于深色模式。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 深色模式已开启时返回 {@code true}
      */
     public static boolean isDarkMode(@NonNull Context context) {
@@ -375,7 +380,7 @@ public final class UiTool {
     /**
      * 判断当前设备是否处于横屏状态。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 处于横屏状态时返回 {@code true}
      */
     public static boolean isHorizontalScreen(@NonNull Context context) {
@@ -385,7 +390,7 @@ public final class UiTool {
     /**
      * 判断当前设备是否处于竖屏状态。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 处于竖屏状态时返回 {@code true}
      */
     public static boolean isVerticalScreen(@NonNull Context context) {
@@ -427,22 +432,24 @@ public final class UiTool {
 
     // ----------------------- 文本测量 -------------------------
 
-    private static final Paint MEASURE_PAINT = new Paint();
+    private static final ThreadLocal<Paint> MEASURE_PAINT = ThreadLocal.withInitial(Paint::new);
 
     /**
      * 测量指定文本在给定字号（sp）下的渲染像素宽度。
      * <p>
      * 使用 {@link Context} 提供的字体缩放密度，将 sp 字号正确换算为像素后测量。
-     * 内部复用静态 {@link Paint} 实例，避免高频测量（如 onDraw）时反复分配对象。
+     * 内部复用按线程隔离的静态 {@link Paint} 实例（{@link ThreadLocal}），避免高频测量（如 onDraw）
+     * 时反复分配对象，同时消除跨线程并发修改共享 Paint 导致字号竞争的问题。
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @param text    待测量的文本，不得为 {@code null}
      * @param spSize  文本字号（单位：sp）
      * @return 文本的像素宽度
      */
     public static float measureText(@NonNull Context context, @NonNull String text, float spSize) {
-        MEASURE_PAINT.setTextSize(applyDimension(context, TypedValue.COMPLEX_UNIT_SP, spSize));
-        return MEASURE_PAINT.measureText(text);
+        Paint paint = MEASURE_PAINT.get();
+        paint.setTextSize(applyDimension(context, TypedValue.COMPLEX_UNIT_SP, spSize));
+        return paint.measureText(text);
     }
 
     private static float applyDimension(@NonNull Context context, int unit, float value) {

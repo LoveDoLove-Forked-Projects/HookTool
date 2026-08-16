@@ -19,7 +19,6 @@
 package com.hchen.app.hook;
 
 import android.annotation.SuppressLint;
-import android.content.Context;
 import android.os.Bundle;
 
 import androidx.annotation.NonNull;
@@ -41,27 +40,23 @@ import io.github.libxposed.api.XposedModuleInterface;
  * <p>
  * 开发者应覆写 {@link #onPackageReady(XposedModuleInterface.PackageReadyParam)} 方法以注册 Hook 逻辑。
  *
+ * @author 焕晨HChen
  * @see AbsModule
  */
 public class TestHook extends AbsModule {
-    private Context context;
-
+    /**
+     * 包就绪回调：注册示例 Hook。
+     */
     @Override
     protected void onPackageReady(@NonNull XposedModuleInterface.PackageReadyParam param) {
         registerHooks();
     }
 
+    /**
+     * 热更新完成回调：重新注册 Hook（旧句柄已由框架解除）。
+     */
     @Override
     protected void onHotReloaded(@NonNull XposedModuleInterface.HotReloadedParam param) {
-        Object savedState = param.getSavedInstanceState();
-        if (savedState instanceof Map) {
-            Object savedContext = ((Map<?, ?>) savedState).get("CONTEXT");
-            if (savedContext instanceof Context) {
-                context = (Context) savedContext;
-            }
-        }
-        // 热更新后在本类（新代码）实例中重新注册 Hook；
-        // 旧的 Hook 句柄已由框架解除，此处注册的是全新 AbsHook 实例，不会重复执行。
         registerHooks();
     }
 
@@ -71,8 +66,6 @@ public class TestHook extends AbsModule {
             "test",
             String.class,
             new AbsHook() {
-                private Context context;
-
                 @Override
                 public void before() {
                     super.before();
@@ -98,17 +91,8 @@ public class TestHook extends AbsModule {
                 }
 
                 @Override
-                public void onHotReloading(@Nullable Bundle extras, @NonNull Map<String, Object> state) {
-                    state.put("CONTEXT_INNER", context);
-                }
-
-                @Override
                 public void onHotReloaded(@Nullable Object thisObject, @NonNull Map<String, Object> inState) {
                     super.onHotReloaded(thisObject, inState);
-                    Object savedContext = inState.get("CONTEXT_INNER");
-                    if (savedContext instanceof Context) {
-                        context = (Context) savedContext;
-                    }
                     if (thisObject != null) {
                         setField(thisObject, "test", true);
                     }
@@ -122,15 +106,13 @@ public class TestHook extends AbsModule {
      * <p>
      * 在此保存需要在热重载后恢复的模块级状态数据。
      * 返回的 {@link Map} 会被 {@link com.hchen.hooktool.hook.HookRegistry#reloading(Bundle)}
-     * 合并到全局快照中。
+     * 合并到全局快照中。本示例无模块级状态需要保存，返回空映射以演示 API 用法。
      *
      * @param extras 热重载附加数据，可能为 {@code null}
      * @return 模块级状态键值对
      */
     @Override
     protected Map<String, Object> onHotReloading(@Nullable Bundle extras) {
-        Map<String, Object> map = new HashMap<>();
-        map.put("CONTEXT", context);
-        return map;
+        return new HashMap<>();
     }
 }

@@ -49,7 +49,9 @@ import java.io.ByteArrayOutputStream;
  */
 public final class BitmapTool {
     private static final String TAG = "BitmapTool";
-    /** 圆角裁剪时用于绘制圆角矩形遮罩的颜色，最终由原图经 {@link PorterDuff.Mode#SRC_IN} 覆盖，取值不影响结果。 */
+    /**
+     * 圆角裁剪时用于绘制圆角矩形遮罩的颜色，最终由原图经 {@link PorterDuff.Mode#SRC_IN} 覆盖，取值不影响结果。
+     */
     private static final int ROUND_RECT_COLOR = 0xff424242;
 
     private BitmapTool() {
@@ -61,7 +63,7 @@ public final class BitmapTool {
      * 如果传入的 Drawable 已经是 {@link BitmapDrawable} 类型且其内部持有的 Bitmap 不为 null，
      * 则直接返回该 Bitmap，避免不必要的像素拷贝。否则将使用 Drawable 自身的固有宽高进行绘制转换。
      *
-     * @param drawable 待转换的 Drawable 对象，不得为 {@code null}
+     * @param drawable 非空 Drawable 对象
      * @return 转换得到的 {@link Bitmap} 对象，永不为 {@code null}
      */
     @NonNull
@@ -82,7 +84,7 @@ public final class BitmapTool {
      * 若固有宽高同样无效，则退化为 1x1 像素。根据 Drawable 的不透明度自动选取
      * {@link Bitmap.Config#ARGB_8888} 或 {@link Bitmap.Config#RGB_565} 作为像素格式。
      *
-     * @param drawable 待转换的 Drawable 对象，不得为 {@code null}
+     * @param drawable 非空 Drawable 对象
      * @param width    目标宽度（单位：px），不大于 0 时取 Drawable 固有宽度
      * @param height   目标高度（单位：px），不大于 0 时取 Drawable 固有高度
      * @return 转换得到的 {@link Bitmap} 对象，永不为 {@code null}
@@ -122,14 +124,13 @@ public final class BitmapTool {
         Bitmap output = Bitmap.createBitmap(bitmap.getWidth(), bitmap.getHeight(), Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(output);
 
-        final int color = ROUND_RECT_COLOR;
         final Paint paint = new Paint();
         final Rect rect = new Rect(0, 0, bitmap.getWidth(), bitmap.getHeight());
         final RectF rectF = new RectF(rect);
 
         paint.setAntiAlias(true);
         canvas.drawARGB(0, 0, 0, 0);
-        paint.setColor(color);
+        paint.setColor(ROUND_RECT_COLOR);
         canvas.drawRoundRect(rectF, radius, radius, paint);
 
         paint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC_IN));
@@ -191,6 +192,13 @@ public final class BitmapTool {
      */
     @Nullable
     public static Bitmap bytesToBitmap(@NonNull byte[] bytes) {
-        return bytes.length != 0 ? BitmapFactory.decodeByteArray(bytes, 0, bytes.length) : null;
+        if (bytes.length == 0) {
+            return null;
+        }
+        Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+        if (bitmap == null) {
+            AndroidLog.logW(TAG, "Failed to decode bitmap from byte array, returning null.");
+        }
+        return bitmap;
     }
 }

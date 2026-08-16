@@ -34,10 +34,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.hchen.hooktool.callback.IAppDataGetter;
-import com.hchen.hooktool.callback.IDecomposer;
+import com.hchen.hooktool.core.CoreTool;
 import com.hchen.hooktool.data.AppData;
-import com.hchen.hooktool.exception.UnexpectedException;
-import com.hchen.hooktool.helper.TryHelper;
 import com.hchen.hooktool.log.AndroidLog;
 
 import java.util.List;
@@ -56,6 +54,11 @@ import java.util.List;
  * </ul>
  * <p>
  * 该类为纯工具类，所有方法均为静态方法，不允许实例化。
+ * <p>
+ * 注意（Android 11+ 包可见性）：本类基于 {@link PackageManager} 的查询结果受宿主应用
+ * manifest 声明的包可见性约束。若宿主未声明对应包的 `<queries>` 或 {@code QUERY_ALL_PACKAGES}，
+ * 对不可见包将返回 {@code false}/-1/{@code null} 等默认值，属预期行为；模块开发者应提示
+ * 宿主配置相应可见性声明。
  *
  * @author 焕晨HChen
  */
@@ -71,7 +74,7 @@ public final class PackageTool {
      * 内部通过 {@link PackageManager#getPackageInfo(String, int)} 进行查询，
      * 若抛出 {@link PackageManager.NameNotFoundException} 则视为未安装。
      *
-     * @param context     上下文对象，不得为 {@code null}
+     * @param context     非空上下文
      * @param packageName 待查询的应用包名
      * @return 已安装返回 {@code true}，未安装返回 {@code false}
      */
@@ -93,7 +96,7 @@ public final class PackageTool {
      * {@link PackageManager#COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED}（首次使用自动启用）不算禁用。
      * 包未安装时返回 {@code false}，不抛出异常。
      *
-     * @param context     上下文对象，不得为 {@code null}
+     * @param context     非空上下文
      * @param packageName 待查询的应用包名
      * @return 已被禁用返回 {@code true}
      */
@@ -112,24 +115,18 @@ public final class PackageTool {
      * <p>
      * {@link UserHandle#getUserId(int)} 在 AOSP 中标注为 {@code @hide @UnsupportedAppUsage}
      * 的隐藏 API，无法在公开 SDK 中直接调用，故此处通过反射绕过编译期检查；
-     * 运行期在 Xposed 等特权环境下可用。若调用失败，返回 -1。
+     * 若调用失败，返回 -1。
      *
      * @param uid 应用的 uid
      * @return 对应的 user ID，获取失败时返回 -1
      */
     public static int getUserId(int uid) {
-        return TryHelper.doTry(new IDecomposer<Integer>() {
-            @Override
-            public Integer get() throws Throwable {
-                Object result = InvokeTool.callStaticMethod(
-                    UserHandle.class,
-                    "getUserId",
-                    new Class[]{int.class},
-                    uid
-                );
-                return result != null ? (int) result : -1;
-            }
-        }).getOrDefault(-1);
+        try {
+            return (int) CoreTool.callStaticMethod(UserHandle.class, "getUserId", uid);
+        } catch (Throwable e) {
+            AndroidLog.logE(TAG, "Unable to resolve UserHandle.getUserId.", e);
+            return -1;
+        }
     }
 
     /**
@@ -159,7 +156,7 @@ public final class PackageTool {
      * {@link ApplicationInfo} 后委托给 {@link #isSystem(ApplicationInfo)}。
      * 包未安装时返回 {@code false}。
      *
-     * @param context     上下文对象，不得为 {@code null}
+     * @param context     非空上下文
      * @param packageName 待查询的应用包名
      * @return 是系统应用返回 {@code true}；包未安装返回 {@code false}
      * @see #isSystem(ApplicationInfo)
@@ -178,7 +175,7 @@ public final class PackageTool {
      * 自动适配 API 33 及以上的 {@link PackageManager#getPackageUid(String, PackageManager.PackageInfoFlags)}。
      * 包未安装时返回 -1。
      *
-     * @param context     上下文对象，不得为 {@code null}
+     * @param context     非空上下文
      * @param packageName 待查询的应用包名
      * @return 应用 uid；包未安装返回 -1
      */
@@ -197,7 +194,7 @@ public final class PackageTool {
     /**
      * 获取应用的版本名（versionName），包未安装时返回 {@code null}。
      *
-     * @param context     上下文对象，不得为 {@code null}
+     * @param context     非空上下文
      * @param packageName 待查询的应用包名
      * @return 版本名字符串；包未安装返回 {@code null}
      */
@@ -216,7 +213,7 @@ public final class PackageTool {
      * 统一以 {@code long} 返回 {@link PackageInfo#getLongVersionCode()}，可承载超过 {@code int}
      * 范围的版本号。包未安装时返回 -1。
      *
-     * @param context     上下文对象，不得为 {@code null}
+     * @param context     非空上下文
      * @param packageName 待查询的应用包名
      * @return 版本号；包未安装返回 -1
      */
@@ -235,13 +232,15 @@ public final class PackageTool {
      * 此方法为 {@link #getAppData(Context, boolean, IAppDataGetter)} 的便捷重载，
      * 默认不加载图标（{@code loadIcon = false}）。
      *
-     * @param context        上下文对象，不得为 {@code null}
-     * @param iAppDataGetter 自定义的应用数据查询回调，不得为 {@code null}
-     * @param <T>            包信息类型（如 {@link PackageInfo}、{@link ApplicationInfo} 等）
+     * @param context       非空上下文
+     * @param appDataGetter 自定义的应用数据查询回调，不得为 {@code null}
+     * @param <T>           包信息类型（如 {@link PackageInfo}、{@link ApplicationInfo} 等）
      * @return 包含查询结果的 {@link AppData} 数组
+     * @throws PackageManager.NameNotFoundException 查询失败时以原始异常向上抛出
      */
-    public static <T> AppData[] getAppData(@NonNull Context context, @NonNull IAppDataGetter<T> iAppDataGetter) {
-        return getAppData(context, false, iAppDataGetter);
+    @NonNull
+    public static <T> AppData[] getAppData(@NonNull Context context, @NonNull IAppDataGetter<T> appDataGetter) {
+        return getAppData(context, false, appDataGetter);
     }
 
     /**
@@ -251,10 +250,6 @@ public final class PackageTool {
      * {@link ApplicationInfo}、{@link ProviderInfo}。
      * <p>
      * 本方法在当前线程内同步执行查询与转换，并将结果直接返回。
-     * 查询失败（如 {@link PackageManager.NameNotFoundException}）时，捕获到的原始异常会原样
-     * 向上抛出（内部经 {@link TryHelper#doTry} 捕获、经
-     * {@link com.hchen.hooktool.data.ResultData#getOrThrow()} 重新抛出原始异常对象），
-     * 调用方可自行 try-catch 或交由模块全局异常处理器兜底。
      * <p>
      * 使用示例：
      * <pre>{@code
@@ -267,27 +262,26 @@ public final class PackageTool {
      * });
      * }</pre>
      *
-     * @param context        上下文对象，不得为 {@code null}
-     * @param loadIcon       是否加载应用图标；{@code true} 时填充 {@link AppData#icon}，
-     *                       {@code false}（默认）时 {@link AppData#icon} 为 {@code null}，可显著降低
-     *                       列表查询场景的内存与性能开销
-     * @param iAppDataGetter 自定义的应用数据查询回调，不得为 {@code null}
-     * @param <T>            包信息类型
+     * @param context       非空上下文
+     * @param loadIcon      是否加载应用图标；{@code true} 时填充 {@link AppData#icon}，
+     *                      {@code false}（默认）时 {@link AppData#icon} 为 {@code null}，可显著降低
+     *                      列表查询场景的内存与性能开销
+     * @param appDataGetter 自定义的应用数据查询回调，不得为 {@code null}
+     * @param <T>           包信息类型
      * @return 查询并转换后的 {@link AppData} 数组，恒不为 {@code null}
-     * @throws PackageManager.NameNotFoundException 查询失败时以原始异常向上抛出
      * @see #createAppData(PackageManager, Object, boolean)
      */
+    @NonNull
     public static <T> AppData[] getAppData(@NonNull Context context, boolean loadIcon,
-                                           @NonNull IAppDataGetter<T> iAppDataGetter) {
-        return TryHelper.doTry(() -> {
-            PackageManager packageManager = context.getPackageManager();
-            List<T> ts = iAppDataGetter.getPackages(packageManager);
-            AppData[] appDataArray = new AppData[ts.size()];
-            for (int i = 0; i < ts.size(); i++) {
-                appDataArray[i] = createAppData(packageManager, ts.get(i), loadIcon);
-            }
-            return appDataArray;
-        }).getOrThrow();
+                                           @NonNull IAppDataGetter<T> appDataGetter) {
+        PackageManager packageManager = context.getPackageManager();
+        List<T> ts = appDataGetter.getPackages(packageManager);
+        AppData[] appDataArray = new AppData[ts.size()];
+        int i = 0;
+        for (T t : ts) {
+            appDataArray[i++] = createAppData(packageManager, t, loadIcon);
+        }
+        return appDataArray;
     }
 
     /**
@@ -304,8 +298,8 @@ public final class PackageTool {
      * 其中版本号、版本名及 {@link AppData#packageInfo} 仅当输入为 {@link PackageInfo}
      * 类型时才被填充，其余输入类型下恒为 {@code null}。
      *
-     * @param pm {@link PackageManager} 实例，用于加载应用图标和标签
-     * @param t  待转换的包信息对象
+     * @param pm  {@link PackageManager} 实例，用于加载应用图标和标签
+     * @param t   待转换的包信息对象
      * @param <T> 包信息类型
      * @return 填充完毕的 {@link AppData} 实例
      * @throws IllegalArgumentException 若传入的对象类型不受支持
@@ -372,7 +366,15 @@ public final class PackageTool {
         if (applicationInfo != null) {
             appData.packageInfo = packageInfo;
             appData.applicationInfo = applicationInfo;
-            appData.icon = loadIcon ? BitmapTool.drawableToBitmap(applicationInfo.loadIcon(pm)) : null;
+            if (loadIcon) {
+                try {
+                    appData.icon = BitmapTool.drawableToBitmap(applicationInfo.loadIcon(pm));
+                } catch (RuntimeException e) {
+                    // 单个应用图标加载/转换失败降级为 null，不中断整体列表转换。
+                    AndroidLog.logW(TAG, "Failed to load icon for package: " + applicationInfo.packageName, e);
+                    appData.icon = null;
+                }
+            }
             try {
                 appData.label = applicationInfo.loadLabel(pm).toString();
             } catch (RuntimeException e) {
@@ -398,13 +400,13 @@ public final class PackageTool {
      *
      * @param resolveInfo {@link ResolveInfo} 对象
      * @return 包含 {@link ApplicationInfo} 的 {@link ComponentInfo}
-     * @throws UnexpectedException 若无法从 ResolveInfo 中获取任何应用组件信息
+     * @throws IllegalStateException 若无法从 ResolveInfo 中获取任何应用组件信息
      */
     @NonNull
     private static ComponentInfo aboutResolveInfo(@NonNull ResolveInfo resolveInfo) {
         if (resolveInfo.activityInfo != null) return resolveInfo.activityInfo;
         if (resolveInfo.serviceInfo != null) return resolveInfo.serviceInfo;
         if (resolveInfo.providerInfo != null) return resolveInfo.providerInfo;
-        throw new UnexpectedException("Unable to obtain application information.");
+        throw new IllegalStateException("Unable to obtain application information.");
     }
 }

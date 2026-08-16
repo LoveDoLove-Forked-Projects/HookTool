@@ -32,7 +32,6 @@ import androidx.annotation.Nullable;
 
 import com.hchen.hooktool.ModuleData;
 import com.hchen.hooktool.core.CoreTool;
-import com.hchen.hooktool.exception.InjectResourcesException;
 import com.hchen.hooktool.hook.AbsHook;
 import com.hchen.hooktool.log.XposedLog;
 
@@ -91,9 +90,9 @@ public final class ResInjectTool {
     /**
      * 将模块的 APK 资源注入到目标应用的资源加载流程中。
      * <p>
-     * 在 Android R（API 30）及以上版本中，通过创建 {@link ResourcesLoader} 并 hook
-     * {@code android.content.res.ResourcesKey} 构造函数，将模块资源注入资源搜索链；
-     * 在更低版本中则通过修改 {@code splitResDirs} 参数实现注入。此方法仅首次调用生效，后续调用将被忽略。
+     * 通过创建 {@link ResourcesLoader} 并 hook {@code android.content.res.ResourcesKey} 构造函数，
+     * 将模块资源注入资源搜索链（minSdk 30 已确保 {@code ResourcesLoader} 路径可用）。
+     * 此方法仅首次调用生效，后续调用将被忽略。
      * <p>
      * 使用前务必在模块的 {@code build.gradle} 中添加如下配置：
      * <pre> {@code
@@ -108,7 +107,8 @@ public final class ResInjectTool {
      * }<br/>
      * Tip: `0x64` 为资源 ID 前缀，可自行修改（推荐范围 0x30 至 0x6F）。
      *
-     * @throws InjectResourcesException 创建 {@link ResourcesLoader} 或 {@link ParcelFileDescriptor} 失败时抛出
+     * @throws IllegalStateException 创建 {@link ResourcesLoader} 或 {@link ParcelFileDescriptor} 失败时抛出；
+     *                                  其余任意 {@link Throwable}（如 hook 失败）将原样上抛
      */
     public static void injectModuleRes() {
         if (!isInjected.compareAndSet(false, true)) return;
@@ -125,7 +125,7 @@ public final class ResInjectTool {
                     loader.addProvider(provider);
                     resourcesLoader = loader;
                 } catch (IOException e) {
-                    throw new InjectResourcesException("Failed to create res loader.", e);
+                    throw new IllegalStateException("Failed to create res loader.", e);
                 }
             }
 
@@ -239,6 +239,7 @@ public final class ResInjectTool {
     public static void setResReplacement(@NonNull String packageName, @NonNull String type, @NonNull String resName, int replacementResId) {
         applyHooks();
         replacements.put(packageName + ":" + type + "/" + resName, new Pair<>(ReplacementType.ID, replacementResId));
+        replacementCount++;
     }
 
     /**
@@ -254,6 +255,7 @@ public final class ResInjectTool {
     public static void setDensityReplacement(@NonNull String packageName, @NonNull String type, @NonNull String resName, float replacementResValue) {
         applyHooks();
         replacements.put(packageName + ":" + type + "/" + resName, new Pair<>(ReplacementType.DENSITY, replacementResValue));
+        replacementCount++;
     }
 
     /**
@@ -269,11 +271,17 @@ public final class ResInjectTool {
     public static void setObjectReplacement(@NonNull String packageName, @NonNull String type, @NonNull String resName, Object replacementResValue) {
         applyHooks();
         replacements.put(packageName + ":" + type + "/" + resName, new Pair<>(ReplacementType.OBJECT, replacementResValue));
+        replacementCount++;
     }
 
-    private static int STYLE_NUM_ENTRIES;
-    private static int STYLE_TYPE;
-    private static int STYLE_RESOURCE_ID;
+    private static volatile int STYLE_NUM_ENTRIES;
+    private static volatile int STYLE_TYPE;
+    private static volatile int STYLE_RESOURCE_ID;
+    /**
+     * 已注册替换规则数，用于 hook 回调热路径的空表短路：非零才进入完整的资源名解析与查找。
+     * {@code volatile} 保证模块线程写入、目标进程线程读取的可见性。
+     */
+    private static volatile int replacementCount;
 
     /**
      * 对 {@link Resources} 和 {@link TypedArray} 的各类资源获取方法进行 hook，使其支持运行时替换。
@@ -289,17 +297,38 @@ public final class ResInjectTool {
      *     <li>整型数组、字符串数组、文本数组</li>
      *     <li>百分比（Fraction）</li>
      * </ul>
+     * <p>
+     * 两阶段执行：先解析 {@link TypedArray} 内部常量（{@code STYLE_*}，可能失败），成功后再注册全部 hook。
+     * 任一阶段失败都会回滚 {@code isHooked} 并上抛，避免"半安装 + 标记已装 + 后续替换静默失效"的脏状态。
      *
-     * @throws InjectResourcesException 未先调用 {@link #injectModuleRes()} 或读取 {@link TypedArray} 内部常量失败时抛出
+     * @throws IllegalStateException 未先调用 {@link #injectModuleRes()} 或读取 {@link TypedArray} 内部常量失败时抛出
      */
-    @SuppressWarnings("DataFlowIssue")
     private static void applyHooks() {
         if (!isHooked.compareAndSet(false, true)) return;
         if (!isInjected.get()) {
             isHooked.set(false);
-            throw new InjectResourcesException("Should inject module res first.");
+            throw new IllegalStateException("Should inject module res first.");
         }
+        try {
+            // 阶段一：先解析 TypedArray 内部常量，失败时未注册任何 hook。
+            STYLE_NUM_ENTRIES = (int) CoreTool.getStaticField(TypedArray.class, "STYLE_NUM_ENTRIES");
+            STYLE_TYPE = (int) CoreTool.getStaticField(TypedArray.class, "STYLE_TYPE");
+            STYLE_RESOURCE_ID = (int) CoreTool.getStaticField(TypedArray.class, "STYLE_RESOURCE_ID");
+            if (STYLE_NUM_ENTRIES <= 0) {
+                throw new IllegalStateException("Failed to read STYLE_NUM_ENTRIES from TypedArray.");
+            }
 
+            // 阶段二：注册全部 hook。
+            registerResHooks();
+            registerTypedArrayHooks();
+        } catch (Throwable t) {
+            // 失败回滚标志，允许调用方感知并重试，而非永久静默失效。
+            isHooked.set(false);
+            throw t;
+        }
+    }
+
+    private static void registerResHooks() {
         CoreTool.hookMethod(Resources.class, "loadXmlResourceParser", int.class, String.class, hookResBefore); // XmlResourceParser
         CoreTool.hookMethod(Resources.class, "getDimension", int.class, hookResBefore); // float
         CoreTool.hookMethod(Resources.class, "getDimensionPixelOffset", int.class, hookResBefore); // int
@@ -319,13 +348,9 @@ public final class ResInjectTool {
         CoreTool.hookMethod(Resources.class, "getColorStateList", int.class, Resources.Theme.class, hookResBefore); // ColorStateList
         CoreTool.hookMethod(Resources.class, "getFraction", int.class, int.class, int.class, hookResBefore); // float
         CoreTool.hookMethod(Resources.class, "getDrawableForDensity", int.class, int.class, Resources.Theme.class, hookResBefore); // Drawable
+    }
 
-        STYLE_NUM_ENTRIES = (int) CoreTool.getStaticField(TypedArray.class, "STYLE_NUM_ENTRIES");
-        STYLE_TYPE = (int) CoreTool.getStaticField(TypedArray.class, "STYLE_TYPE");
-        STYLE_RESOURCE_ID = (int) CoreTool.getStaticField(TypedArray.class, "STYLE_RESOURCE_ID");
-        if (STYLE_NUM_ENTRIES <= 0) {
-            throw new InjectResourcesException("Failed to read STYLE_NUM_ENTRIES from TypedArray.");
-        }
+    private static void registerTypedArrayHooks() {
         CoreTool.hookMethod(TypedArray.class, "getColor", int.class, int.class, hookTypedBefore); // int
         CoreTool.hookMethod(TypedArray.class, "getColorStateList", int.class, hookTypedBefore); // ColorStateList
         CoreTool.hookMethod(TypedArray.class, "getBoolean", int.class, boolean.class, hookTypedBefore); // boolean
@@ -342,23 +367,23 @@ public final class ResInjectTool {
         CoreTool.hookMethod(TypedArray.class, "getLayoutDimension", int.class, String.class, hookTypedBefore); // int
         CoreTool.hookMethod(TypedArray.class, "getDrawableForDensity", int.class, int.class, hookTypedBefore); // Drawable
         CoreTool.hookMethod(TypedArray.class, "getFraction", int.class, int.class, int.class, float.class, hookTypedBefore); // float
-
     }
 
     private static final AbsHook hookResBefore = new AbsHook() {
         @Override
         public void before() {
+            String methodName = null;
             try {
-                String methodName = getExecutable().getName();
+                methodName = getExecutable().getName();
                 Object value = getResourceReplacement((Method) getExecutable(), (Resources) getThisObject(), getArgs());
                 if (value != null) {
                     if ("getDimensionPixelOffset".equals(methodName) || "getDimensionPixelSize".equals(methodName)) {
-                        if (value instanceof Float) value = ((Float) value).intValue();
+                        if (value instanceof Float) value = Math.round((Float) value);
                     }
                     setResult(value);
                 }
             } catch (Throwable t) {
-                XposedLog.logW(TAG, "Failed to replacement res.", t);
+                XposedLog.logW(TAG, "Failed to replace resource (method: " + methodName + ").", t);
             }
         }
     };
@@ -366,6 +391,7 @@ public final class ResInjectTool {
     private static final AbsHook hookTypedBefore = new AbsHook() {
         @Override
         public void before() {
+            String methodName = null;
             try {
                 int index = (int) getArg(0);
                 index *= STYLE_NUM_ENTRIES;
@@ -377,7 +403,7 @@ public final class ResInjectTool {
                 int type = data[index + STYLE_TYPE];
                 int id = data[index + STYLE_RESOURCE_ID];
                 if (type != TypedValue.TYPE_NULL /* 不为空数据 */ && id != 0 /* 储存的是资源 */) {
-                    String methodName = getExecutable().getName();
+                    methodName = getExecutable().getName();
                     Resources resources = (Resources) CoreTool.getField(getThisObject(), "mResources");
                     if (resources == null) return;
                     Resources.Theme theme = (Resources.Theme) CoreTool.getField(getThisObject(), "mTheme");
@@ -389,13 +415,13 @@ public final class ResInjectTool {
                                 "getDimensionPixelSize".equals(methodName) ||
                                 "getLayoutDimension".equals(methodName)
                         ) {
-                            if (value instanceof Float) value = ((Float) value).intValue();
+                            if (value instanceof Float) value = Math.round((Float) value);
                         }
                         setResult(value);
                     }
                 }
             } catch (Throwable t) {
-                XposedLog.logW(TAG, "Failed to replacement typed array.", t);
+                XposedLog.logW(TAG, "Failed to replace typed array resource (method: " + methodName + ").", t);
             }
         }
     };
@@ -412,19 +438,21 @@ public final class ResInjectTool {
      */
     @Nullable
     private static Pair<ReplacementType, Object> findReplacement(@NonNull Resources res, int resId) {
-        String pkgName = null;
+        String packageName = null;
         String resType = null;
         String resName = null;
         try {
-            pkgName = res.getResourcePackageName(resId);
+            packageName = res.getResourcePackageName(resId);
             resType = res.getResourceTypeName(resId);
             resName = res.getResourceEntryName(resId);
-        } catch (Throwable ignore) {
+        } catch (Throwable e) {
+            // 无效 resId 属预期路径，D 级记录便于排查资源替换未生效。
+            XposedLog.logD(TAG, "Failed to resolve resource name for id: " + resId, e);
         }
 
-        if (pkgName == null || resType == null || resName == null) return null;
+        if (packageName == null || resType == null || resName == null) return null;
 
-        String resFullName = pkgName + ":" + resType + "/" + resName;
+        String resFullName = packageName + ":" + resType + "/" + resName;
         Pair<ReplacementType, Object> replacement = replacements.get(resFullName);
         if (replacement == null) {
             replacement = replacements.get("*:" + resType + "/" + resName);
@@ -449,6 +477,7 @@ public final class ResInjectTool {
      */
     @Nullable
     private static Object getResourceReplacement(@NonNull Method method, @NonNull Resources res, @NonNull Object[] params) {
+        if (replacementCount == 0) return null; // 空表短路：未注册任何规则时跳过完整的资源名解析。
         Pair<ReplacementType, Object> replacement = findReplacement(res, (int) params[0]);
         if (replacement == null) return null;
 
@@ -466,7 +495,7 @@ public final class ResInjectTool {
                         .setType(XposedInterface.Invoker.Type.ORIGIN)
                         .invoke(res, params);
                 } catch (InvocationTargetException | IllegalAccessException e) {
-                    throw new InjectResourcesException(e);
+                    throw new IllegalStateException(e);
                 }
             }
         }
@@ -489,6 +518,7 @@ public final class ResInjectTool {
      */
     @Nullable
     private static Object getTypedArrayReplacement(@NonNull Resources res, @Nullable Resources.Theme theme, int id, @NonNull String methodName, @NonNull Object[] params) {
+        if (replacementCount == 0) return null; // 空表短路
         Pair<ReplacementType, Object> replacement = findReplacement(res, id);
         if (replacement == null) return null;
 
@@ -541,7 +571,7 @@ public final class ResInjectTool {
                     }
                     return result;
                 } catch (InvocationTargetException | IllegalAccessException e) {
-                    throw new InjectResourcesException(e);
+                    throw new IllegalStateException(e);
                 }
             }
         }

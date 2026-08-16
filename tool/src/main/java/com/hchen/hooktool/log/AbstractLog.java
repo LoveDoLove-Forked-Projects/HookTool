@@ -75,29 +75,26 @@ public abstract class AbstractLog {
     /**
      * 日志调度骨架：等级门控 → 消息格式化 → 委派给子类的抽象输出点。
      *
-     * @param impl       承担输出的子类实例（通常为其私有静态单例）
-     * @param level      框架日志等级
-     * @param tag        调用方自定义标识，作参数传给输出目标
-     * @param message    日志正文；为 {@code null} 时仅输出等级前缀
-     * @param stackTrace 附加的调用栈字符串；为 {@code null} 时不追加
-     * @param throwable  待记录的异常；为 {@code null} 时不传异常
+     * @param impl      承担输出的子类实例（通常为其私有静态单例）
+     * @param level     框架日志等级
+     * @param tag       调用方自定义标识，作参数传给输出目标
+     * @param message   日志正文；为 {@code null} 时仅输出等级前缀
+     * @param throwable 待记录的异常；为 {@code null} 时不传异常
      */
     protected static void logAt(AbstractLog impl, int level,
-                                String tag, String message,
-                                String stackTrace, Throwable throwable) {
+                                String tag, String message, Throwable throwable) {
         if (!isLoggable(level)) return;
-        impl.log(toPriority(level), tag, buildMessage(level, message, stackTrace), throwable);
+        impl.log(toPriority(level), tag, buildMessage(level, message), throwable);
     }
 
     /**
-     * 构建日志消息体：等级前缀 + 正文 +（可选）调用栈信息。
+     * 构建日志消息体：等级前缀 + 正文。
      *
-     * @param level      框架日志等级，用于选取 {@code "[E]: "} 等前缀
-     * @param message    日志正文，为 {@code null} 时视为空串
-     * @param stackTrace 附加调用栈，为 {@code null} 时不追加
+     * @param level   框架日志等级，用于选取 {@code "[E]: "} 等前缀
+     * @param message 日志正文，为 {@code null} 时视为空串
      * @return 格式化后的消息体
      */
-    private static String buildMessage(int level, String message, String stackTrace) {
+    private static String buildMessage(int level, String message) {
         String prefix;
         switch (level) {
             case ModuleConfig.LOG_E:
@@ -114,9 +111,6 @@ public abstract class AbstractLog {
                 break;
         }
         String body = (message == null) ? "" : message;
-        if (stackTrace != null) {
-            body += "\n[Stack Info]: " + stackTrace;
-        }
         return prefix + body;
     }
 

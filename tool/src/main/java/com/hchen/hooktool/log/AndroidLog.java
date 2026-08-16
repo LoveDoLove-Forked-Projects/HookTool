@@ -36,7 +36,9 @@ import com.hchen.hooktool.ModuleConfig;
  * @see XposedLog
  */
 public class AndroidLog extends AbstractLog {
-    /** 本类输出目标单例，供静态门面委托。 */
+    /**
+     * 本类输出目标单例，供静态门面委托。
+     */
     private static final AbstractLog IMPL = new AndroidLog();
 
     private AndroidLog() {
@@ -47,27 +49,14 @@ public class AndroidLog extends AbstractLog {
     /**
      * 以 ERROR 级别输出一条纯文本日志。
      * <p>
-     * 日志格式为：{@code [tag][E]: log}。
+     * 日志格式为：{@code [tag][E]: message}。
      * 当全局日志等级低于 {@link ModuleConfig#LOG_E} 时，此调用将被静默跳过。
      *
-     * @param tag 业务侧自定义标识，将嵌入消息头部的方括号中
-     * @param log 待输出的日志正文
+     * @param tag     业务侧自定义标识，将嵌入消息头部的方括号中
+     * @param message 待输出的日志正文
      */
-    public static void logE(String tag, String log) {
-        logAt(IMPL, ModuleConfig.LOG_E, tag, log, null, null);
-    }
-
-    /**
-     * 以 ERROR 级别输出一条附带调用栈字符串的日志。
-     * <p>
-     * 日志格式为：{@code [tag][E]: log[Stack Info]: stackTrace}。
-     *
-     * @param tag        业务侧自定义标识
-     * @param log        待输出的日志正文
-     * @param stackTrace 以字符串形式提供的调用栈信息，将追加到消息末尾
-     */
-    public static void logE(String tag, String log, String stackTrace) {
-        logAt(IMPL, ModuleConfig.LOG_E, tag, log, stackTrace, null);
+    public static void logE(String tag, String message) {
+        logAt(IMPL, ModuleConfig.LOG_E, tag, message, null);
     }
 
     /**
@@ -79,18 +68,20 @@ public class AndroidLog extends AbstractLog {
      * @param throwable 待记录的异常实例
      */
     public static void logE(String tag, Throwable throwable) {
-        logAt(IMPL, ModuleConfig.LOG_E, tag, null, null, throwable);
+        logAt(IMPL, ModuleConfig.LOG_E, tag, null, throwable);
     }
 
     /**
      * 以 ERROR 级别输出一条同时包含文本描述和异常信息的日志。
+     * <p>
+     * 异常对象的完整堆栈将由 {@link android.util.Log} 底层自动格式化输出。
      *
-     * @param tag       业务侧自定义标识
-     * @param log       待输出的日志正文
+     * @param tag       业务侧自定义标识，将嵌入消息头部的方括号中
+     * @param message   待输出的日志正文
      * @param throwable 待记录的异常实例
      */
-    public static void logE(String tag, String log, Throwable throwable) {
-        logAt(IMPL, ModuleConfig.LOG_E, tag, log, null, throwable);
+    public static void logE(String tag, String message, Throwable throwable) {
+        logAt(IMPL, ModuleConfig.LOG_E, tag, message, throwable);
     }
 
     // -------- logW --------------
@@ -100,22 +91,11 @@ public class AndroidLog extends AbstractLog {
      * <p>
      * 当全局日志等级低于 {@link ModuleConfig#LOG_W} 时，此调用将被静默跳过。
      *
-     * @param tag 业务侧自定义标识
-     * @param log 待输出的日志正文
+     * @param tag     业务侧自定义标识，将嵌入消息头部的方括号中
+     * @param message 待输出的日志正文
      */
-    public static void logW(String tag, String log) {
-        logAt(IMPL, ModuleConfig.LOG_W, tag, log, null, null);
-    }
-
-    /**
-     * 以 WARN 级别输出一条附带调用栈字符串的日志。
-     *
-     * @param tag        业务侧自定义标识
-     * @param log        待输出的日志正文
-     * @param stackTrace 以字符串形式提供的调用栈信息
-     */
-    public static void logW(String tag, String log, String stackTrace) {
-        logAt(IMPL, ModuleConfig.LOG_W, tag, log, stackTrace, null);
+    public static void logW(String tag, String message) {
+        logAt(IMPL, ModuleConfig.LOG_W, tag, message, null);
     }
 
     /**
@@ -125,18 +105,18 @@ public class AndroidLog extends AbstractLog {
      * @param throwable 待记录的异常实例
      */
     public static void logW(String tag, Throwable throwable) {
-        logAt(IMPL, ModuleConfig.LOG_W, tag, null, null, throwable);
+        logAt(IMPL, ModuleConfig.LOG_W, tag, null, throwable);
     }
 
     /**
      * 以 WARN 级别输出一条同时包含文本描述和异常信息的日志。
      *
-     * @param tag       业务侧自定义标识
-     * @param log       待输出的日志正文
+     * @param tag       业务侧自定义标识，将嵌入消息头部的方括号中
+     * @param message   待输出的日志正文
      * @param throwable 待记录的异常实例
      */
-    public static void logW(String tag, String log, Throwable throwable) {
-        logAt(IMPL, ModuleConfig.LOG_W, tag, log, null, throwable);
+    public static void logW(String tag, String message, Throwable throwable) {
+        logAt(IMPL, ModuleConfig.LOG_W, tag, message, throwable);
     }
 
     // ------------ logI -------------
@@ -146,22 +126,11 @@ public class AndroidLog extends AbstractLog {
      * <p>
      * 当全局日志等级低于 {@link ModuleConfig#LOG_I} 时，此调用将被静默跳过。
      *
-     * @param tag 业务侧自定义标识
-     * @param log 待输出的日志正文
+     * @param tag     业务侧自定义标识，将嵌入消息头部的方括号中
+     * @param message 待输出的日志正文
      */
-    public static void logI(String tag, String log) {
-        logAt(IMPL, ModuleConfig.LOG_I, tag, log, null, null);
-    }
-
-    /**
-     * 以 INFO 级别输出一条附带调用栈字符串的日志。
-     *
-     * @param tag        业务侧自定义标识
-     * @param log        待输出的日志正文
-     * @param stackTrace 以字符串形式提供的调用栈信息
-     */
-    public static void logI(String tag, String log, String stackTrace) {
-        logAt(IMPL, ModuleConfig.LOG_I, tag, log, stackTrace, null);
+    public static void logI(String tag, String message) {
+        logAt(IMPL, ModuleConfig.LOG_I, tag, message, null);
     }
 
     /**
@@ -171,18 +140,18 @@ public class AndroidLog extends AbstractLog {
      * @param throwable 待记录的异常实例
      */
     public static void logI(String tag, Throwable throwable) {
-        logAt(IMPL, ModuleConfig.LOG_I, tag, null, null, throwable);
+        logAt(IMPL, ModuleConfig.LOG_I, tag, null, throwable);
     }
 
     /**
      * 以 INFO 级别输出一条同时包含文本描述和异常信息的日志。
      *
-     * @param tag       业务侧自定义标识
-     * @param log       待输出的日志正文
+     * @param tag       业务侧自定义标识，将嵌入消息头部的方括号中
+     * @param message   待输出的日志正文
      * @param throwable 待记录的异常实例
      */
-    public static void logI(String tag, String log, Throwable throwable) {
-        logAt(IMPL, ModuleConfig.LOG_I, tag, log, null, throwable);
+    public static void logI(String tag, String message, Throwable throwable) {
+        logAt(IMPL, ModuleConfig.LOG_I, tag, message, throwable);
     }
 
     // ---------- logD ---------------
@@ -192,22 +161,11 @@ public class AndroidLog extends AbstractLog {
      * <p>
      * 当全局日志等级低于 {@link ModuleConfig#LOG_D} 时，此调用将被静默跳过。
      *
-     * @param tag 业务侧自定义标识
-     * @param log 待输出的日志正文
+     * @param tag     业务侧自定义标识，将嵌入消息头部的方括号中
+     * @param message 待输出的日志正文
      */
-    public static void logD(String tag, String log) {
-        logAt(IMPL, ModuleConfig.LOG_D, tag, log, null, null);
-    }
-
-    /**
-     * 以 DEBUG 级别输出一条附带调用栈字符串的日志。
-     *
-     * @param tag        业务侧自定义标识
-     * @param log        待输出的日志正文
-     * @param stackTrace 以字符串形式提供的调用栈信息
-     */
-    public static void logD(String tag, String log, String stackTrace) {
-        logAt(IMPL, ModuleConfig.LOG_D, tag, log, stackTrace, null);
+    public static void logD(String tag, String message) {
+        logAt(IMPL, ModuleConfig.LOG_D, tag, message, null);
     }
 
     /**
@@ -217,18 +175,18 @@ public class AndroidLog extends AbstractLog {
      * @param throwable 待记录的异常实例
      */
     public static void logD(String tag, Throwable throwable) {
-        logAt(IMPL, ModuleConfig.LOG_D, tag, null, null, throwable);
+        logAt(IMPL, ModuleConfig.LOG_D, tag, null, throwable);
     }
 
     /**
      * 以 DEBUG 级别输出一条同时包含文本描述和异常信息的日志。
      *
-     * @param tag       业务侧自定义标识
-     * @param log       待输出的日志正文
+     * @param tag       业务侧自定义标识，将嵌入消息头部的方括号中
+     * @param message   待输出的日志正文
      * @param throwable 待记录的异常实例
      */
-    public static void logD(String tag, String log, Throwable throwable) {
-        logAt(IMPL, ModuleConfig.LOG_D, tag, log, null, throwable);
+    public static void logD(String tag, String message, Throwable throwable) {
+        logAt(IMPL, ModuleConfig.LOG_D, tag, message, throwable);
     }
 
     /**

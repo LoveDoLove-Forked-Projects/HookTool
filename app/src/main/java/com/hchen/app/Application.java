@@ -34,6 +34,7 @@ import io.github.libxposed.service.XposedServiceHelper;
  * 并通过 {@link XposedServiceHelper#registerListener} 注册 Xposed 服务的
  * 生命周期监听，以便在服务绑定或异常断开时执行相应处理。</p>
  *
+ * @author 焕晨HChen
  * @see XposedServiceHelper
  * @see ModuleConfig
  */

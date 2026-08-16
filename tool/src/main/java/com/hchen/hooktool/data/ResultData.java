@@ -19,7 +19,6 @@
 package com.hchen.hooktool.data;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 
 import com.hchen.hooktool.callback.IDecomposer;
 import com.hchen.hooktool.core.CoreTool;
@@ -44,9 +43,13 @@ import java.util.function.Function;
 public final class ResultData<R> {
     private final IDecomposer<R> decomposer;
     private volatile boolean isExecuted;
-    /** 计算结果；{@code volatile} 保证 DCL 快速路径（不持有锁）下对首次计算结果的可见性。 */
+    /**
+     * 计算结果；{@code volatile} 保证 DCL 快速路径（不持有锁）下对首次计算结果的可见性。
+     */
     private volatile R result;
-    /** 捕获的异常；同 {@link #result} 需要跨线程可见。 */
+    /**
+     * 捕获的异常；同 {@link #result} 需要跨线程可见。
+     */
     private volatile Throwable throwable;
 
     /**
@@ -69,7 +72,7 @@ public final class ResultData<R> {
      * @return 计算成功时返回结果值；计算失败时返回 {@code null}
      */
     public R get() {
-        runIfNeed();
+        runIfNeeded();
         return result;
     }
 
@@ -84,7 +87,7 @@ public final class ResultData<R> {
      * @return 计算成功时返回结果值（可能为 {@code null}），失败时返回 {@code def} 参数值
      */
     public R getOrDefault(R def) {
-        runIfNeed();
+        runIfNeeded();
         if (isSuccess()) {
             return result;
         }
@@ -98,7 +101,7 @@ public final class ResultData<R> {
      * @throws Throwable 计算过程中捕获的异常，经由 {@link CoreTool#throwIt} 抛出
      */
     public R getOrThrow() {
-        runIfNeed();
+        runIfNeeded();
         if (isSuccess()) {
             return result;
         }
@@ -116,7 +119,7 @@ public final class ResultData<R> {
      * @return 计算成功时返回原始结果；计算失败时返回转换函数生成的替代结果
      */
     public R onThrow(@NonNull Function<Throwable, R> consumer) {
-        runIfNeed();
+        runIfNeeded();
         if (isSuccess()) return result;
         return consumer.apply(throwable);
     }
@@ -126,9 +129,8 @@ public final class ResultData<R> {
      *
      * @return 计算失败时返回捕获的异常；计算成功时返回 {@code null}
      */
-    @Nullable
     public Throwable getThrowable() {
-        runIfNeed();
+        runIfNeeded();
         return throwable;
     }
 
@@ -138,7 +140,7 @@ public final class ResultData<R> {
      * @return 计算成功返回 {@code true}；计算失败返回 {@code false}
      */
     public boolean isSuccess() {
-        runIfNeed();
+        runIfNeeded();
         return Objects.isNull(throwable);
     }
 
@@ -149,7 +151,7 @@ public final class ResultData<R> {
      * 已执行后直接返回不再加锁，仅在首次计算时短暂持有锁，避免多次读取时的锁竞争。
      * 计算结果（或异常）被安全地缓存。
      */
-    private void runIfNeed() {
+    private void runIfNeeded() {
         if (isExecuted) {
             return;
         }

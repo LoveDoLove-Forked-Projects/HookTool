@@ -26,6 +26,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.hchen.hooktool.log.LogExpand;
+import com.hchen.hooktool.log.XposedLog;
 
 import java.lang.reflect.Executable;
 import java.util.Arrays;
@@ -105,19 +106,9 @@ public abstract class AbsHook {
     /**
      * 当前最新一次被拦截的方法调用的宿主对象实例（即 {@code this} 引用）。
      * <p>
-     * 该字段会在每次进入钩子拦截上下文时，从当前调用链 {@link XposedInterface.Chain} 中获取最新值并自动更新。
-     * 若被拦截的方法是静态方法，则该字段为 {@code null}。
-     * <p>
-     * 外部代码可通过此字段直接获取该钩子最近一次拦截到的目标对象实例，
-     * 而无需在钩子回调中手动调用 {@link #getThisObject()}。
-     * <p>
-     * 注意：该字段的值是实时更新的，但仅在钩子生命周期内（即 {@link #before()} 至 {@link #after()} 之间）
-     * 具有有效含义；在生命周期之外仍保留上一次拦截的值。
-     * <p>
-     * 使用 {@code volatile} 保证跨线程可见性：{@link #enter(XposedInterface.Chain)} 在回调线程中
-     * 写入此字段，而 {@link HookRegistry#reloading} 在热更新触发线程中读取。
-     * 若无 {@code volatile}，读取线程可能看到过期的 {@code null} 值，
-     * 导致热重载时 {@code thisObject} 状态丢失。
+     * 每次进入钩子拦截上下文时自动更新；静态方法钩子恒为 {@code null}。
+     * 仅在 {@link #before()} 至 {@link #after()} 之间有效，生命周期之外保留上一次的值。
+     * 以 {@code volatile} 保证回调线程写入、热更新线程读取的跨线程可见性。
      *
      * @see #getThisObject()
      * @see XposedInterface.Chain#getThisObject()
@@ -149,8 +140,8 @@ public abstract class AbsHook {
             this.isResultChanged = false;
         }
 
-        @Override
         @NonNull
+        @Override
         public String toString() {
             return "CallState{" +
                 "originalChain=" + originalChain +
@@ -513,7 +504,11 @@ public abstract class AbsHook {
      * @param args 新的参数数组，长度须与原方法参数列表匹配
      * @throws IllegalArgumentException 当传入数组的长度与原始参数个数不一致时抛出
      */
-    public final void setArgs(@NonNull Object... args) {
+    public final void setArgs(Object... args) {
+        if (args == null) {
+            args = new Object[]{null};
+        }
+
         CallState state = getState();
         if (state.args == null) {
             state.args = state.originalChain.getArgs().toArray(new Object[0]);
@@ -566,33 +561,16 @@ public abstract class AbsHook {
     }
 
     /**
-     * 记录 proceed 阶段中首个未消费的异常。
+     * 记录非主动抛出中首个未消费的异常。
      * <p>
      * 与 {@link #setThrowable(Throwable)} 不同，本方法仅在当前尚未记录任何异常时生效，
-     * 保证 proceed 阶段产生的原始异常不会被后续阶段（如 after）的异常覆盖，遵循"首因优先"原则。
+     * 保证主动设置的异常不会被后续阶段的异常覆盖。
      * <p>
      * 仅在 {@link HookBridge} 内部调用。
      *
-     * @param throwable proceed 阶段未消费的异常，不为 {@code null}
+     * @param throwable 非主动抛出的异常，不为 {@code null}
      */
-    final void setProceedThrowable(@NonNull Throwable throwable) {
-        CallState state = getState();
-        if (state.throwable == null) {
-            state.throwable = throwable;
-        }
-    }
-
-    /**
-     * 记录 after 阶段中首个未消费的异常。
-     * <p>
-     * 同样遵循"首因优先"原则：若 proceed 阶段已记录异常（{@link #getThrowable()}
-     * 不为 {@code null}），则此处设置不生效，原始异常得以保留。
-     * <p>
-     * 仅在 {@link HookBridge} 内部调用。
-     *
-     * @param throwable after 阶段未消费的异常，不为 {@code null}
-     */
-    final void setAfterThrowable(@NonNull Throwable throwable) {
+    final void setNonActiveThrowable(@NonNull Throwable throwable) {
         CallState state = getState();
         if (state.throwable == null) {
             state.throwable = throwable;
@@ -604,7 +582,6 @@ public abstract class AbsHook {
      *
      * @return 当前关联的异常对象；若无异常则返回 {@code null}
      */
-    @Nullable
     public final Throwable getThrowable() {
         return getState().throwable;
     }
@@ -612,7 +589,7 @@ public abstract class AbsHook {
     /**
      * 将钩子句柄注册到内部管理列表中。
      * <p>
-     * 注册后的句柄可供 {@link #unHookSelf()} 使用，以便一次性解除所有钩子。
+     * 注册后的句柄可供 {@link #unhookSelf()} 使用，以便一次性解除所有钩子。
      *
      * @param handle 框架返回的钩子句柄，不为 {@code null}
      */
@@ -716,19 +693,26 @@ public abstract class AbsHook {
     /**
      * 解除当前钩子实例注册的所有方法拦截。
      * <p>
-     * 遍历内部已注册的全部钩子句柄并逐一解除。
-     * 解除完成后内部句柄列表将被清空，以便后续重新注册。
+     * 遍历内部已注册的全部钩子句柄并逐一解除，任一句柄解除失败不会阻断其余句柄；
+     * 解除完成后内部句柄列表必然被清空（{@code finally} 兜底），以便后续重新注册。
      *
      * @throws IllegalStateException 当钩子尚未生效（句柄列表为空）时调用此方法将抛出
      */
-    final public void unHookSelf() {
+    final public void unhookSelf() {
         if (handles.isEmpty()) {
             throw new IllegalStateException("Hook handle is not initialized. Cannot unhook before the hook is applied.");
         }
-        for (XposedInterface.HookHandle handle : handles) {
-            handle.unhook();
+        try {
+            for (XposedInterface.HookHandle handle : handles) {
+                try {
+                    handle.unhook();
+                } catch (Throwable e) {
+                    XposedLog.logW(LogExpand.getTag(), "Failed to unhook a hook handle.", e);
+                }
+            }
+        } finally {
+            handles.clear();
         }
-        handles.clear();
     }
 
     /**
@@ -753,8 +737,8 @@ public abstract class AbsHook {
         return LogExpand.observeCall(this);
     }
 
-    @Override
     @NonNull
+    @Override
     public String toString() {
         StateStack stack = stackLocal.get();
         CallState state = stack != null ? stack.current() : null;
@@ -805,7 +789,7 @@ public abstract class AbsHook {
 
         @Override
         public Object proceed() throws Throwable {
-            return state.originalChain.proceed();
+            return state.isArgsChanged ? state.originalChain.proceed(state.args) : state.originalChain.proceed();
         }
 
         @Override

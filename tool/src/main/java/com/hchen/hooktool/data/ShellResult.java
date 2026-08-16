@@ -18,76 +18,69 @@
  */
 package com.hchen.hooktool.data;
 
-import android.text.TextUtils;
-
 import androidx.annotation.NonNull;
 
-import java.util.Arrays;
-import java.util.Objects;
-
 /**
- * Shell 命令执行结果的不可变数据记录。
+ * Shell 命令执行流程的最终结果类型。
  * <p>
- * 该记录封装了一次 Shell 命令执行的完整输出信息，包括所执行的命令字符串、
- * 进程退出码、标准输出（stdout）内容以及标准错误（stderr）内容，
- * 方便调用方对命令执行结果进行全方位的检查与分析。
+ * 取代 {@code exec()/async()} 旧有的"失败返回 {@code null}"的隐式约定，把"命令是否正常
+ * 执行完毕并产出数据"（流程层）与"命令自身退出码是否为零"（命令层）两层正交语义
+ * 显式建模，使调用方无需判空即可区分流程结果与具体失败原因：
+ * <ul>
+ *   <li>{@link Completed}：命令已正常执行完毕并产出数据，携带 {@link CommandResult}；
+ *       命令自身是否成功需再经 {@link Completed#isSuccess()}（或 {@link CommandResult#isSuccess()}）判断</li>
+ *   <li>{@link Failed}：shell 执行流程未能正常完成，携带 {@link ShellFailureReason} 指明原因</li>
+ * </ul>
  * <p>
- * 构造时会对 {@code outputs} 与 {@code errors} 数组进行防御性拷贝，
- * 防止外部对数组的后续修改影响本记录；但数组内部元素仍为共享引用，
- * 跨线程传递时请勿并发修改数组内容。
+ * 使用示例：
+ * <pre>{@code
+ *         ShellResult result = shellTool.cmd("ls").exec();
+ *         if (result instanceof ShellResult.Completed completed) {
+ *             boolean ok = completed.isSuccess();
+ *             String[] out = completed.result().outputs();
+ *         } else if (result instanceof ShellResult.Failed failed) {
+ *             switch (failed.reason()) {
+ *                 case TIMEOUT:
+ *                     // 命令超时
+ *                 case IO_ERROR:
+ *                     // 流或进程异常
+ *                 default:
+ *                     // NOT_CONFIGURED / INTERCEPTED / INTERRUPTED ...
+ *             }
+ *         }
+ * }</pre>
  *
- * @param command  实际执行的完整命令字符串
- * @param exitCode 命令进程的退出码字符串（{@code "0"} 通常表示执行成功）
- * @param outputs  标准输出内容按行分割后所得的字符串数组
- * @param errors   标准错误输出内容按行分割后所得的字符串数组
  * @author 焕晨HChen
- * @noinspection DeconstructionCanBeUsed
+ * @see CommandResult
+ * @see ShellFailureReason
  */
-public record ShellResult(@NonNull String command, @NonNull String exitCode,
-                          @NonNull String[] outputs, @NonNull String[] errors) {
-    public ShellResult {
-        Objects.requireNonNull(command);
-        Objects.requireNonNull(exitCode);
-        Objects.requireNonNull(outputs);
-        Objects.requireNonNull(errors);
-        // 防御性拷贝，避免外部修改传入数组影响本记录的不可变性。
-        outputs = outputs.clone();
-        errors = errors.clone();
+public sealed interface ShellResult {
+    /**
+     * 命令已正常执行完毕并产出数据的变体。
+     * <p>
+     * 注意：此变体只代表流程正常收敛，不代表命令自身成功——命令退出码可能非零。
+     * 命令级成功判断请使用 {@link #isSuccess()}。
+     *
+     * @param result 单条命令的完整执行数据记录
+     */
+    record Completed(@NonNull CommandResult result) implements ShellResult {
+        /**
+         * 判断该命令自身是否执行成功。
+         * <p>
+         * 委托给底层 {@link CommandResult}，通过检查退出码是否等于 {@code "0"} 确定。
+         *
+         * @return 命令退出码为 {@code "0"} 时返回 {@code true}，否则返回 {@code false}
+         */
+        public boolean isSuccess() {
+            return result.isSuccess();
+        }
     }
 
     /**
-     * 判断该命令是否执行成功。
-     * <p>
-     * 通过检查退出码是否等于 {@code "0"} 来确定执行是否成功。
+     * shell 执行流程未能正常完成的变体。
      *
-     * @return 当退出码为 {@code "0"} 时返回 {@code true}，否则返回 {@code false}
+     * @param reason 流程失败原因分类
      */
-    public boolean isSuccess() {
-        return TextUtils.equals("0", exitCode);
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (!(o instanceof ShellResult that)) return false;
-        return Objects.equals(command, that.command) &&
-            Objects.equals(exitCode, that.exitCode) &&
-            Arrays.deepEquals(errors, that.errors) &&
-            Arrays.deepEquals(outputs, that.outputs);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(command, exitCode, Arrays.hashCode(outputs), Arrays.hashCode(errors));
-    }
-
-    @NonNull
-    @Override
-    public String toString() {
-        return "ShellResult{" +
-            "command='" + command + '\'' +
-            ", exitCode='" + exitCode + '\'' +
-            ", outputs=" + Arrays.deepToString(outputs) +
-            ", errors=" + Arrays.deepToString(errors) +
-            '}';
+    record Failed(@NonNull ShellFailureReason reason) implements ShellResult {
     }
 }

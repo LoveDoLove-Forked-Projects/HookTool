@@ -32,6 +32,9 @@ import java.util.Arrays;
  * SharedPreferences 名称、日志增强扫描路径以及 Hook 成功日志开关等。
  * 所有配置项均通过静态 setter 方法写入、静态 getter 方法读取。
  * <p>
+ * <strong>副作用提示</strong>：所有 setter 修改的都是<strong>进程级</strong>的静态全局状态，
+ * 仅作用于当前进程；在多进程 Xposed 模块（宿主进程 + 模块进程）中，需在每个进程各自初始化。
+ * <p>
  * 建议在 {@link com.hchen.hooktool.ModuleEntrance#initModuleConfig()} 中
  * 完成全部配置的初始化工作。
  *

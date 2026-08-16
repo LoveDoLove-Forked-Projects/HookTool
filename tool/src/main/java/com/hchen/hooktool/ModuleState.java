@@ -47,6 +47,20 @@ import kotlin.text.Charsets;
  * @author 焕晨HChen
  */
 public final class ModuleState {
+    private static final String TAG = "ModuleState";
+    /**
+     * 太极宿主应用包名。
+     */
+    private static final String TAICHI_PACKAGE = "me.weishu.exp";
+    /**
+     * 太极框架激活状态查询的 ContentProvider URI。
+     */
+    private static final String TAICHI_CP_URI = "content://me.weishu.exposed.CP/";
+    /**
+     * 太极 ContentProvider 查询激活状态的方法名。
+     */
+    private static final String TAICHI_METHOD_ACTIVE = "active";
+
     private ModuleState() {
     }
 
@@ -62,25 +76,35 @@ public final class ModuleState {
      */
     public static boolean isExpActive(@NonNull Context context) {
         try {
-            context.getPackageManager().getPackageInfo("me.weishu.exp", PackageManager.GET_ACTIVITIES);
+            context.getPackageManager().getPackageInfo(TAICHI_PACKAGE, PackageManager.GET_ACTIVITIES);
 
             ContentResolver contentResolver = context.getContentResolver();
-            Uri uri = Uri.parse("content://me.weishu.exposed.CP/");
+            Uri uri = Uri.parse(TAICHI_CP_URI);
             Bundle result = null;
+            Throwable lastFailure = null;
             try {
-                result = contentResolver.call(uri, "active", null, null);
+                result = contentResolver.call(uri, TAICHI_METHOD_ACTIVE, null, null);
             } catch (Throwable ignore) {
+                lastFailure = ignore;
             }
 
             try {
                 if (result == null)
-                    result = contentResolver.call(uri, "active", null, null);
+                    result = contentResolver.call(uri, TAICHI_METHOD_ACTIVE, null, null);
             } catch (Throwable ignore) {
+                lastFailure = ignore;
             }
-            if (result == null) return false;
-            return result.getBoolean("active", false);
-        } catch (PackageManager.NameNotFoundException | SecurityException ignore) {
+            if (result == null) {
+                // 首次调用可能失败故重试；双重失败时保留一次 W 级痕迹便于排查。
+                if (lastFailure != null) {
+                    AndroidLog.logW(TAG, "TaiChi active check failed after retry.", lastFailure);
+                }
+                return false;
+            }
+            return result.getBoolean(TAICHI_METHOD_ACTIVE, false);
+        } catch (PackageManager.NameNotFoundException | SecurityException e) {
             // Android 11+ 无包可见性时 getPackageInfo 抛 SecurityException，同样视为非太极环境
+            AndroidLog.logD(TAG, "TaiChi package not visible; treated as non-TaiChi environment.", e);
             return false;
         }
     }
@@ -102,7 +126,6 @@ public final class ModuleState {
      * @param context     应用上下文，用于访问 PackageManager
      * @param packageName 目标应用的包名
      * @return 包含 LSPatch 配置信息的 Map；若目标应用未使用 LSPatch 或解析失败则返回空 Map
-     * @noinspection ExtractMethodRecommender
      */
     @NonNull
     public static Map<String, String> isLSPatchActive(@NonNull Context context, @NonNull String packageName) {

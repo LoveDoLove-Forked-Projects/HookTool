@@ -23,8 +23,9 @@ import androidx.annotation.Nullable;
 
 import com.hchen.hooktool.callback.ICommandListener;
 import com.hchen.hooktool.callback.IExecListener;
+import com.hchen.hooktool.data.CommandResult;
+import com.hchen.hooktool.data.ShellFailureReason;
 import com.hchen.hooktool.data.ShellResult;
-import com.hchen.hooktool.exception.UnexpectedException;
 import com.hchen.hooktool.log.AndroidLog;
 
 import java.io.BufferedReader;
@@ -42,7 +43,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -56,18 +56,22 @@ import java.util.concurrent.atomic.AtomicLong;
  * 提供同步（{@link #exec()}）和异步（{@link #async()}）两种 Shell 命令执行能力，
  * 支持 Root 和普通两种模式（默认分别使用 {@code su} / {@code sh}，可通过
  * {@link #setShellCommands} 自定义）。内部维护持久化的 Shell 进程流，
- * 通过自增命令 ID 与结束标记关联每条命令的输出，实现多命令执行时结果的正确分离。
+ * 通过自增命令 ID 与带随机 nonce 的结束标记关联每条命令的输出，实现多命令执行时结果的正确分离。
  * <p>
  * 命令以 {@link CompletableFuture}{@code <ShellResult>} 作为统一执行句柄：同步与异步
- * 走同一条提交路径，仅调用方是否阻塞等待不同。每条命令独立持有结果，互不覆盖；
- * 命令必然收敛（配对完成 / 流结束兜底 / 命令超时兜底），不会永久阻塞。
+ * 走同一条提交路径，仅调用方是否阻塞等待不同。成功与各类失败统一以 {@link ShellResult}
+ * 建模（不再用 {@code null} 隐式表达失败），命令必然收敛（配对完成 / 流结束兜底 / 命令超时兜底），
+ * 不会永久阻塞。
  * <p>
  * 使用示例：
  * <pre>{@code
  *         ShellTool shellTool = ShellTool.obtain(true);
- *         ShellResult shellResult = shellTool.cmd("ls").exec();
- *         if (shellResult != null) {
- *             boolean result = shellResult.isSuccess();
+ *         ShellResult result = shellTool.cmd("ls").exec();
+ *         if (result instanceof ShellResult.Completed completed) {
+ *             boolean ok = completed.isSuccess();
+ *             String[] out = completed.result().outputs();
+ *         } else {
+ *             // result instanceof ShellResult.Failed failure
  *         }
  *         shellTool.cmd("""
  *             if [[ 1 == 1 ]]; then
@@ -81,7 +85,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *             .cmd("  echo hello               ")
  *             .cmd("fi                         ")
  *             .exec();
- *         Future<ShellResult> future = shellTool.cmd("echo hello").async();
+ *         CompletableFuture<ShellResult> future = shellTool.cmd("echo hello").async();
  *         shellTool.setExecListener(new IExecListener() {
  *             @Override
  *             public void output(@NonNull String command, @NonNull String exitCode, @NonNull String[] outputs) {
@@ -100,11 +104,15 @@ public final class ShellTool {
      */
     private static final long EXEC_TIMEOUT_MS = 10_000;
     /**
-     * 命令级兜底超时（毫秒）：超过该时长仍未收敛的命令将以异常完成，防止命令句柄泄漏。
+     * 命令级兜底超时（毫秒）：超过该时长仍未收敛的命令将以失败完成，防止命令句柄泄漏。
      */
     private static final long COMMAND_TIMEOUT_MS = 15_000;
+    /**
+     * Root 检测 {@code su -c true} 的等待超时（秒）：超时视为无 Root 权限，避免单线程检测被挂起的 su 占死。
+     */
+    private static final long ROOT_CHECK_TIMEOUT_S = 5;
 
-    private static final ShellTool shellTool = new ShellTool();
+    private static final ShellTool instance = new ShellTool();
     private static volatile boolean isRoot = false;
     private static volatile String[] shellCommands = new String[]{"su", "sh"};
     private static volatile IExecListener globalExecListeners;
@@ -140,7 +148,7 @@ public final class ShellTool {
     @NonNull
     public static ShellTool obtain() {
         shellImpl.init();
-        return shellTool;
+        return instance;
     }
 
     /**
@@ -164,7 +172,7 @@ public final class ShellTool {
     @NonNull
     public static ShellTool setRoot(boolean isRoot) {
         ShellTool.isRoot = isRoot;
-        return shellTool;
+        return instance;
     }
 
     /**
@@ -172,7 +180,7 @@ public final class ShellTool {
      * <p>
      * 数组长度必须为 2：第一个元素为 Root 模式命令，第二个为普通模式命令。
      * 数组的合法性在下次 {@link #obtain()} 初始化进程时校验，长度不足 2 或含空元素将抛出
-     * {@link UnexpectedException}。
+     * {@link IllegalArgumentException}。该方法修改的是全局静态配置，仅作用于当前进程。
      *
      * @param commands Shell 命令数组，长度必须为 2
      * @return {@link ShellTool} 单例实例，支持链式调用
@@ -180,19 +188,23 @@ public final class ShellTool {
     @NonNull
     public static ShellTool setShellCommands(@NonNull String[] commands) {
         shellCommands = commands.clone();
-        return shellTool;
+        return instance;
     }
 
     /**
      * 设置全局执行监听器，用于接收所有命令（同步与异步）的输出和错误回调。
+     * <p>
+     * 设置新监听器会<strong>覆盖此前注册的全局监听器</strong>（全局仅保留单个槽位）；传 {@code null} 可取消监听。
+     * 监听器回调在读取线程上执行，回调内请勿同步调用 {@link #exec()}——那会阻塞读取线程自身，
+     * 导致回调内发起的新命令因输出无人读取而在 10 秒后超时返回。
      *
-     * @param iExecListener 执行监听器实例；传 {@code null} 可取消监听
+     * @param execListener 执行监听器实例；传 {@code null} 可取消监听
      * @return {@link ShellTool} 单例实例，支持链式调用
      */
     @NonNull
-    public static ShellTool setExecListener(@Nullable IExecListener iExecListener) {
-        globalExecListeners = iExecListener;
-        return shellTool;
+    public static ShellTool setExecListener(@Nullable IExecListener execListener) {
+        globalExecListeners = execListener;
+        return instance;
     }
 
     /**
@@ -206,7 +218,7 @@ public final class ShellTool {
     @NonNull
     public static ShellTool setCommandListener(@Nullable ICommandListener listener) {
         globalCommandListener = listener;
-        return shellTool;
+        return instance;
     }
 
     /**
@@ -239,13 +251,14 @@ public final class ShellTool {
     @NonNull
     public ShellTool enableSplicingMode() {
         shellImpl.enableSplicingMode();
-        return shellTool;
+        return instance;
     }
 
     /**
      * 添加一条待执行的 Shell 命令。
      * <p>
      * 若处于拼接模式，命令将被暂存到拼接列表中；否则直接覆盖当前待执行命令。
+     * 注意：命令内容若包含 {@code exit} 会终止持久化 Shell 会话，之后需重新 {@link #obtain()}。
      *
      * @param cmd 命令字符串，不可为 {@code null}
      * @return {@link ShellTool} 单例实例，支持链式调用
@@ -253,18 +266,19 @@ public final class ShellTool {
     @NonNull
     public ShellTool cmd(@NonNull String cmd) {
         shellImpl.cmd(cmd);
-        return shellTool;
+        return instance;
     }
 
     /**
      * 同步执行已添加的命令，阻塞当前线程直到命令执行完毕并返回结果。
      * <p>
-     * 阻塞等待存在超时（默认 10 秒），超时、被拦截或未添加命令时返回 {@code null}，
+     * 阻塞等待存在超时（默认 10 秒），超时返回 {@link ShellFailureReason#TIMEOUT} 失败结果，
      * 不会永久阻塞。若需长时间运行，请改用 {@link #async()}。
      *
-     * @return 命令执行结果；未添加命令、被拦截、超时或异常时返回 {@code null}
+     * @return 命令执行流程结果：流程收敛为 {@link ShellResult.Completed}，流程失败为 {@link ShellResult.Failed}；
+     * 不会为 {@code null}
      */
-    @Nullable
+    @NonNull
     public ShellResult exec() {
         return shellImpl.exec();
     }
@@ -272,26 +286,27 @@ public final class ShellTool {
     /**
      * 异步执行已添加的命令，立即返回结果句柄，不阻塞当前线程。
      * <p>
-     * 返回的 {@link Future} 在命令完成时携带有结果；可通过 {@code get()} 阻塞等待
-     * 或 {@code whenComplete} 异步监听。同时命令完成会触发全局执行监听器
+     * 返回的 {@link CompletableFuture} 在命令收敛时携带 {@link ShellResult}；可通过 {@code get()} 阻塞等待
+     * 或 {@code whenComplete} 异步监听。预飞行失败（未添加命令、被拦截）直接返回已完成的
+     * {@code ShellResult.Failed} 结果，不会返回 {@code null}。同时命令完成会触发全局执行监听器
      * （{@link #setExecListener}）的对应回调。
      *
-     * @return 命令结果的 {@link Future} 句柄；未添加命令或被拦截时返回 {@code null}
+     * @return 命令结果的 {@link CompletableFuture} 句柄，不为 {@code null}
      */
-    @Nullable
-    public Future<ShellResult> async() {
+    @NonNull
+    public CompletableFuture<ShellResult> async() {
         return shellImpl.submitCommand(null);
     }
 
     /**
      * 异步执行已添加的命令，并通过指定的监听器接收结果。
      *
-     * @param iExecListener 用于接收本次命令执行结果的监听器，不为 {@code null}
-     * @return 命令结果的 {@link Future} 句柄；未添加命令或被拦截时返回 {@code null}
+     * @param execListener 用于接收本次命令执行结果的监听器，不为 {@code null}
+     * @return 命令结果的 {@link CompletableFuture} 句柄，不为 {@code null}
      */
-    @Nullable
-    public Future<ShellResult> async(@NonNull IExecListener iExecListener) {
-        return shellImpl.submitCommand(iExecListener);
+    @NonNull
+    public CompletableFuture<ShellResult> async(@NonNull IExecListener execListener) {
+        return shellImpl.submitCommand(execListener);
     }
 
     // --------------------------------------- Root Check -------------------------------------------
@@ -308,11 +323,11 @@ public final class ShellTool {
     /**
      * 同步检查当前设备是否具备 Root 权限，并通过监听器返回检测结果。
      *
-     * @param iExecListener 接收 Root 检测结果的监听器
+     * @param execListener 接收 Root 检测结果的监听器
      * @return 具备 Root 权限返回 {@code true}
      */
-    public static boolean isRootAvailable(@NonNull IExecListener iExecListener) {
-        return checkRootSync(iExecListener);
+    public static boolean isRootAvailable(@NonNull IExecListener execListener) {
+        return checkRootSync(execListener);
     }
 
     /**
@@ -321,14 +336,14 @@ public final class ShellTool {
      * 历史方法：{@code sync} 参数已无意义，本方法始终执行<strong>真实同步检测</strong>并返回真实结果。
      * 需要异步检测请使用 {@link #isRootAvailableAsync(IExecListener)}。
      *
-     * @param sync          已忽略，统一为真实同步检测
-     * @param iExecListener 接收 Root 检测结果的监听器，可为 {@code null}
+     * @param sync         已忽略，统一为真实同步检测
+     * @param execListener 接收 Root 检测结果的监听器，可为 {@code null}
      * @return 具备 Root 权限返回 {@code true}
      * @deprecated 请使用 {@link #isRootAvailable()} 或 {@link #isRootAvailableAsync(IExecListener)}
      */
     @Deprecated
-    public static boolean isRootAvailable(boolean sync, @Nullable IExecListener iExecListener) {
-        return checkRootSync(iExecListener);
+    public static boolean isRootAvailable(boolean sync, @Nullable IExecListener execListener) {
+        return checkRootSync(execListener);
     }
 
     /**
@@ -337,21 +352,24 @@ public final class ShellTool {
      * 在独立后台线程中执行检测，结果通过返回的 {@link CompletableFuture} 获取，
      * 同时通过监听器的 {@code onRootResult} 回调返回。
      *
-     * @param iExecListener 接收 Root 检测结果的监听器，可为 {@code null}
+     * @param execListener 接收 Root 检测结果的监听器，可为 {@code null}
      * @return 携带检测结果的 {@link CompletableFuture}，不为 {@code null}
      */
     @NonNull
-    public static CompletableFuture<Boolean> isRootAvailableAsync(@Nullable IExecListener iExecListener) {
-        return CompletableFuture.supplyAsync(() -> checkRootSync(iExecListener), ROOT_EXECUTOR);
+    public static CompletableFuture<Boolean> isRootAvailableAsync(@Nullable IExecListener execListener) {
+        return CompletableFuture.supplyAsync(() -> checkRootSync(execListener), ROOT_EXECUTOR);
     }
 
     /**
      * 通过执行 {@code su -c true} 并检查退出码，同步判断 Root 权限是否可用。
+     * <p>
+     * 等待子进程退出带 5 秒超时，避免个别设备上 {@code su} 授权弹窗挂起导致单线程
+     * {@link #ROOT_EXECUTOR} 被永久占死、后续异步检测全部排队。
      *
-     * @param iExecListener 接收 Root 检测结果的监听器，可为 {@code null}
+     * @param execListener 接收 Root 检测结果的监听器，可为 {@code null}
      * @return 具备 Root 权限返回 {@code true}
      */
-    private static boolean checkRootSync(@Nullable IExecListener iExecListener) {
+    private static boolean checkRootSync(@Nullable IExecListener execListener) {
         Process process = null;
         try {
             process = Runtime.getRuntime().exec("su -c true");
@@ -359,23 +377,30 @@ public final class ShellTool {
             // 并避免每次调用泄漏两个输入流。
             try (InputStream ignored = process.getInputStream();
                  InputStream ignoredErr = process.getErrorStream()) {
-                int exitCode = process.waitFor();
-                if (iExecListener != null) {
-                    iExecListener.onRootResult(exitCode == 0, String.valueOf(exitCode));
+                if (!process.waitFor(ROOT_CHECK_TIMEOUT_S, TimeUnit.SECONDS)) {
+                    // 超时未退出：视为无 Root 权限，释放进程。
+                    if (execListener != null) {
+                        execListener.onRootResult(false, "-1");
+                    }
+                    return false;
+                }
+                int exitCode = process.exitValue();
+                if (execListener != null) {
+                    execListener.onRootResult(exitCode == 0, String.valueOf(exitCode));
                 }
                 return exitCode == 0;
             }
         } catch (IOException e) {
             AndroidLog.logE(TAG, "Error executing 'su -c true' for root check.", e);
-            if (iExecListener != null) {
-                iExecListener.onRootResult(false, "-1");
+            if (execListener != null) {
+                execListener.onRootResult(false, "-1");
             }
             return false;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             AndroidLog.logE(TAG, "Root check ('su -c true') interrupted.", e);
-            if (iExecListener != null) {
-                iExecListener.onRootResult(false, "-1");
+            if (execListener != null) {
+                execListener.onRootResult(false, "-1");
             }
             return false;
         } finally {
@@ -391,7 +416,8 @@ public final class ShellTool {
      * Shell 流内部实现类。
      * <p>
      * 负责管理 Shell 进程的完整生命周期：进程启动、命令提交、写入、同步等待、关闭与异常处理。
-     * 命令统一经 {@link #submitCommand} 提交为 {@link CompletableFuture}，同步/异步共用同一路径。
+     * 命令统一经 {@link #submitCommand} 提交为 {@link CompletableFuture}{@code <ShellResult>}，
+     * 同步/异步共用同一路径。
      */
     final class ShellImpl {
         private final Object writeLock = new Object();
@@ -438,7 +464,7 @@ public final class ShellTool {
                 process = null;
                 os = null;
                 streamThread = null;
-                throw new UnexpectedException("Error initializing shell stream.", e);
+                throw new IllegalStateException("Error initializing shell stream.", e);
             }
         }
 
@@ -447,7 +473,7 @@ public final class ShellTool {
             if (commands == null || commands.length < 2
                 || commands[0] == null || commands[0].isEmpty()
                 || commands[1] == null || commands[1].isEmpty()) {
-                throw new UnexpectedException(
+                throw new IllegalArgumentException(
                     "setShellCommands must provide a non-empty command array of length 2.");
             }
         }
@@ -458,7 +484,7 @@ public final class ShellTool {
 
         private synchronized void cmd(@NonNull String cmd) {
             if (!isActive()) {
-                throw new UnexpectedException("Shell stream is dead.");
+                throw new IllegalStateException("Shell stream is dead.");
             }
             if (isSplicingMode) {
                 splicingCommands.add(cmd);
@@ -471,32 +497,45 @@ public final class ShellTool {
          * 统一提交命令入口：将当前待执行命令（或拼接结果）写入 Shell 流并返回结果句柄。
          *
          * @param perCmdListener 本次命令专属监听器，可为 {@code null}
-         * @return 命令结果句柄；无待执行命令或被命令监听器拦截时返回 {@code null}
-         * @throws UnexpectedException 当 Shell 流已失效时抛出
+         * @return 命令结果句柄，不为 {@code null}；无待执行命令或被拦截时返回已完成的失败结果
+         * @throws IllegalStateException 当 Shell 流已失效时抛出
          */
-        @Nullable
+        @NonNull
         private synchronized CompletableFuture<ShellResult> submitCommand(@Nullable IExecListener perCmdListener) {
             if (!isActive()) {
-                throw new UnexpectedException("Shell stream is dead.");
+                throw new IllegalStateException("Shell stream is dead.");
             }
 
-            splicingCommandIfNeed();
+            splicingCommandIfNeeded();
             if (command == null) {
-                return null;
+                return CompletableFuture.completedFuture(new ShellResult.Failed(ShellFailureReason.NOT_CONFIGURED));
             }
-            if (globalCommandListener != null && !globalCommandListener.onCommand(command)) {
-                command = null;
-                return null;
+            if (globalCommandListener != null) {
+                boolean allowed;
+                try {
+                    allowed = globalCommandListener.onCommand(command);
+                } catch (Throwable e) {
+                    // 监听器回调异常隔离：不中断执行，保守拦截该命令。
+                    AndroidLog.logW(TAG, "Error during global command listener callback.", e);
+                    allowed = false;
+                }
+                if (!allowed) {
+                    command = null;
+                    return CompletableFuture.completedFuture(new ShellResult.Failed(ShellFailureReason.INTERCEPTED));
+                }
             }
 
             String cmd = command;
             command = null;
             long id = nextCommandId.incrementAndGet();
-            StreamThread.PendingCommand pc = new StreamThread.PendingCommand(id, generation, cmd, perCmdListener);
+            // 每命令独立随机 nonce：结束标记前缀不可预测，防止命令输出内容伪造标记截断/污染结果。
+            String nonce = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+            StreamThread.PendingCommand pc =
+                new StreamThread.PendingCommand(id, generation, cmd, perCmdListener, nonce);
             streamThread.pending.put(id, pc);
             String marker = String.format(Locale.ROOT,
-                "__HT_RET=$?; echo HTM_%s_%d,$__HT_RET; echo HTM_%s_%d,$__HT_RET 1>&2; unset __HT_RET",
-                token, id, token, id
+                "__HT_RET=$?; echo HTM_%s_%d_%s,$__HT_RET; echo HTM_%s_%d_%s,$__HT_RET 1>&2; unset __HT_RET",
+                token, id, nonce, token, id, nonce
             );
 
             synchronized (writeLock) {
@@ -506,9 +545,8 @@ public final class ShellTool {
                 ok &= write(marker);
                 if (!ok) {
                     streamThread.pending.remove(id);
-                    pc.future.completeExceptionally(
-                        new IOException("Failed to write command to shell stream: " + cmd));
-                    return null;
+                    pc.future.complete(new ShellResult.Failed(ShellFailureReason.IO_ERROR));
+                    return pc.future;
                 }
             }
 
@@ -516,29 +554,27 @@ public final class ShellTool {
             return pc.future;
         }
 
-        @Nullable
+        @NonNull
         private ShellResult exec() {
             String cmd = command;
             CompletableFuture<ShellResult> future = submitCommand(null);
-            if (future == null) {
-                return null;
-            }
             try {
+                // 预飞行失败（未添加命令/被拦截）的 future 已处于完成态，get 立即返回。
                 return future.get(EXEC_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             } catch (TimeoutException e) {
                 AndroidLog.logW(TAG, "Shell exec timed out for command: " + cmd, e);
-                return null;
+                return new ShellResult.Failed(ShellFailureReason.TIMEOUT);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 AndroidLog.logW(TAG, "Shell exec interrupted while waiting for result.", e);
-                return null;
+                return new ShellResult.Failed(ShellFailureReason.INTERRUPTED);
             } catch (ExecutionException e) {
                 AndroidLog.logE(TAG, "Shell exec failed for command: " + cmd, e);
-                return null;
+                return new ShellResult.Failed(ShellFailureReason.IO_ERROR);
             }
         }
 
-        private void splicingCommandIfNeed() {
+        private void splicingCommandIfNeeded() {
             if (!isSplicingMode) {
                 return;
             }
@@ -556,17 +592,19 @@ public final class ShellTool {
         }
 
         /**
-         * 为命令调度兜底超时任务：超时仍未收敛时以异常完成，防止命令句柄泄漏。
+         * 为命令调度兜底超时任务：超时仍未收敛时以失败结果完成，防止命令句柄泄漏。
+         * <p>
+         * 与 {@link StreamThread#completeCommand} 共用 {@code completed} CAS：超时与正常完成
+         * 只能胜出一方，杜绝"回调已分发真实结果而句柄却报超时"的窗口。
          *
          * @param pc 待调度的命令数据
          */
         private void scheduleTimeout(@NonNull StreamThread.PendingCommand pc) {
             pc.timeoutTask = SCHEDULER.schedule(() -> {
-                if (pc.future.isDone()) {
-                    return;
+                if (!pc.completed.compareAndSet(false, true)) {
+                    return; // 已由正常完成路径胜出，放弃超时。
                 }
-                pc.future.completeExceptionally(new TimeoutException(
-                    "Shell command timed out after " + COMMAND_TIMEOUT_MS + "ms: " + pc.command));
+                pc.future.complete(new ShellResult.Failed(ShellFailureReason.TIMEOUT));
                 StreamThread st = streamThread;
                 if (st != null) {
                     st.pending.remove(pc.id);
@@ -612,58 +650,67 @@ public final class ShellTool {
             }
         }
 
-        private synchronized void close() {
-            if (process == null && streamThread == null) {
-                return;
-            }
-            closing = true;
-            try {
-                if (isActive()) {
-                    synchronized (writeLock) {
-                        write("exit");
-                    }
+        private void close() {
+            StreamThread st;
+            synchronized (this) {
+                if (process == null && streamThread == null) {
+                    return;
                 }
-
-                if (process != null) {
-                    try {
-                        process.waitFor(3, TimeUnit.SECONDS);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                    process.destroy();
-                    try {
-                        process.waitFor(1, TimeUnit.SECONDS);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
-
-                if (os != null) {
-                    try {
-                        os.close();
-                    } catch (IOException e) {
-                        AndroidLog.logE(TAG, "Error closing shell output stream.", e);
-                    }
-                }
-
-                if (streamThread != null) {
-                    for (StreamThread.PendingCommand pc : streamThread.pending.values()) {
-                        if (!pc.future.isDone()) {
-                            pc.future.completeExceptionally(new IOException("Shell closed."));
-                        }
-                        if (pc.timeoutTask != null) {
-                            pc.timeoutTask.cancel(false);
+                closing = true;
+                try {
+                    if (isActive()) {
+                        synchronized (writeLock) {
+                            write("exit");
                         }
                     }
-                    streamThread.close();
+
+                    if (process != null) {
+                        try {
+                            process.waitFor(3, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        process.destroy();
+                        try {
+                            process.waitFor(1, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+
+                    if (os != null) {
+                        try {
+                            os.close();
+                        } catch (IOException e) {
+                            AndroidLog.logE(TAG, "Error closing shell output stream.", e);
+                        }
+                    }
+
+                    if (streamThread != null) {
+                        for (StreamThread.PendingCommand pc : streamThread.pending.values()) {
+                            if (!pc.future.isDone()) {
+                                pc.future.complete(
+                                    new ShellResult.Failed(ShellFailureReason.IO_ERROR));
+                            }
+                            if (pc.timeoutTask != null) {
+                                pc.timeoutTask.cancel(false);
+                            }
+                        }
+                    }
+                } finally {
+                    process = null;
+                    os = null;
+                    command = null;
+                    isSplicingMode = false;
+                    splicingCommands.clear();
                 }
-            } finally {
-                process = null;
-                os = null;
+                st = streamThread;
                 streamThread = null;
-                command = null;
-                isSplicingMode = false;
-                splicingCommands.clear();
+            }
+            // 在 ShellImpl monitor 之外 join 读取线程：避免与读取线程内的 onBrokenPipe→close()
+            // 互等（持锁 join 会造成 3 秒停顿并阻塞所有 Shell 操作）。
+            if (st != null) {
+                st.close();
             }
         }
 
@@ -692,8 +739,7 @@ public final class ShellTool {
                 }
                 for (StreamThread.PendingCommand pc : st.pending.values()) {
                     if (!pc.future.isDone()) {
-                        pc.future.completeExceptionally(
-                            new IOException("Shell broken pipe: process exited unexpectedly."));
+                        pc.future.complete(new ShellResult.Failed(ShellFailureReason.IO_ERROR));
                     }
                     if (pc.timeoutTask != null) {
                         pc.timeoutTask.cancel(false);
@@ -712,12 +758,47 @@ public final class ShellTool {
             }
             close();
         }
+
+        /**
+         * 处理"进程仍存活但某条流已终止"的会话失效（如命令执行 {@code exec >/dev/null} 重定向）：
+         * 在途命令不再以伪造的成功收敛（旧行为会以 {@code exitCode="-1"} 产出假结果），
+         * 改为以 {@link ShellFailureReason#IO_ERROR} 失败完成，并保留流结束残留输出供
+         * {@code brokenPipe} 回调诊断。
+         *
+         * @param leftover 流终止时残留的未归属输出行
+         */
+        private void onStreamClosed(@NonNull String[] leftover) {
+            StreamThread st = streamThread;
+            if (st != null) {
+                for (StreamThread.PendingCommand pc : st.pending.values()) {
+                    if (!pc.future.isDone()) {
+                        pc.future.complete(new ShellResult.Failed(ShellFailureReason.IO_ERROR));
+                    }
+                    if (pc.timeoutTask != null) {
+                        pc.timeoutTask.cancel(false);
+                    }
+                }
+            }
+            if (brokenReported.compareAndSet(false, true)) {
+                if (globalExecListeners != null) {
+                    try {
+                        globalExecListeners.brokenPipe(
+                            "Shell stream ended while process alive (e.g. exec redirect).",
+                            leftover
+                        );
+                    } catch (Throwable e) {
+                        AndroidLog.logE(TAG, "Error during brokenPipe callback.", e);
+                    }
+                }
+            }
+            // 两条流均已终止后 streamThread.isActive() 为 false，会话自然失效；无需额外重置。
+        }
     }
 
     /**
      * Shell 标准输出和错误输出的读取线程管理类。
      * <p>
-     * 通过两条独立的后台读取线程分别读取标准输出流与错误输出流，利用结束标记行关联命令。
+     * 通过两条独立的后台读取线程分别读取标准输出流与错误输出流，利用带随机 nonce 的结束标记行关联命令。
      * 读取线程<strong>永不阻塞等待</strong>：普通行追加到当前流缓冲，标记行将缓冲移交对应命令；
      * 命令收敛由「双流配对 / 流结束兜底 / 命令超时兜底」三条路径保证。
      */
@@ -794,6 +875,9 @@ public final class ShellTool {
 
         /**
          * 处理一行输出：解析结束标记行并移交缓冲，普通行返回 {@code false} 由调用方入缓冲。
+         * <p>
+         * 仅当标记的 ID、代际与随机 nonce 全部匹配当前在途命令时才算有效标记；
+         * 其余（伪造/陈旧/不匹配）直接丢弃而不回退入缓冲，避免残留/伪造标记污染后续命令输出。
          *
          * @param line    当前读取的行
          * @param isError 是否来自错误输出流
@@ -805,7 +889,21 @@ public final class ShellTool {
             if (marker == null) {
                 return false;
             }
-            handleMarker(marker, isError, buffer);
+            PendingCommand pc = pending.get(marker.id);
+            if (pc == null || pc.generation != shellImpl.generation || !pc.nonce.equals(marker.nonce)) {
+                // 非预期命令 / 代际不符 / nonce 不匹配：不是本会话有效命令的标记，
+                // 丢弃该行而非回退入缓冲，避免残留/伪造标记污染后续命令的输出。
+                return true;
+            }
+            if (isError) {
+                pc.errLines = toArray(buffer);
+                pc.isErrArrived = true;
+            } else {
+                pc.outLines = toArray(buffer);
+                pc.isOutArrived = true;
+            }
+            pc.exitCode = marker.exitCode;
+            maybeComplete(pc);
             return true;
         }
 
@@ -816,37 +914,20 @@ public final class ShellTool {
                 return null;
             }
             String body = line.substring(prefix.length());
+            int underscore = body.indexOf('_');
             int comma = body.indexOf(',');
-            if (comma < 0) {
+            if (underscore < 0 || comma < 0 || underscore >= comma) {
                 return null;
             }
             try {
-                long id = Long.parseLong(body.substring(0, comma));
+                long id = Long.parseLong(body.substring(0, underscore));
+                String nonce = body.substring(underscore + 1, comma);
                 String exitCode = body.substring(comma + 1).trim();
-                return new Marker(id, exitCode);
+                return new Marker(id, nonce, exitCode);
             } catch (NumberFormatException e) {
+                AndroidLog.logD(TAG, "Ignoring unparseable shell marker line: " + line, e);
                 return null;
             }
-        }
-
-        private void handleMarker(@NonNull Marker marker, boolean isError, @NonNull List<String> buffer) {
-            PendingCommand pc = pending.get(marker.id);
-            if (pc == null) {
-                return; // 陈旧或已完成的命令
-            }
-            if (pc.generation != shellImpl.generation) {
-                pending.remove(marker.id);
-                return;
-            }
-            if (isError) {
-                pc.errLines = toArray(buffer);
-                pc.errArrived = true;
-            } else {
-                pc.outLines = toArray(buffer);
-                pc.outArrived = true;
-            }
-            pc.exitCode = marker.exitCode;
-            maybeComplete(pc);
         }
 
         /**
@@ -858,10 +939,10 @@ public final class ShellTool {
             if (pc.future.isDone()) {
                 return;
             }
-            if (!pc.outArrived || !pc.errArrived) {
+            if (!pc.isOutArrived || !pc.isErrArrived) {
                 return;
             }
-            completeCommand(pc, new ShellResult(
+            completeCommand(pc, new CommandResult(
                 pc.command,
                 pc.exitCode,
                 pc.outLines != null ? pc.outLines : EMPTY,
@@ -870,32 +951,35 @@ public final class ShellTool {
         }
 
         /**
-         * 完成命令：先分发监听器回调，再完成 {@link CompletableFuture}，最后清理登记与超时任务。
+         * 完成命令：先取消超时任务，再分发监听器回调，最后完成 {@link CompletableFuture} 并清理登记。
          * <p>
-         * stdout/stderr 两个读取线程可能并发到达同一命令，通过 {@code completed} 原子标志
-         * 保证命令只被完整执行一次（回调与清理均只发生一次）。
+         * stdout/stderr 两个读取线程以及超时任务可能并发到达，通过 {@code completed} 原子标志
+         * 保证命令只被完整执行一次（回调与清理均只发生一次）；取消超时任务在分发回调之前，
+         * 消除"回调执行期间超时任务误报"的窗口。
          *
          * @param pc     命令数据
          * @param result 组装好的命令结果
          */
-        private void completeCommand(@NonNull PendingCommand pc, @NonNull ShellResult result) {
+        private void completeCommand(@NonNull PendingCommand pc, @NonNull CommandResult result) {
             if (pc.completed.compareAndSet(false, true)) {
-                dispatchCallbacks(pc, result);
-                pc.future.complete(result);
-                pending.remove(pc.id);
                 if (pc.timeoutTask != null) {
                     pc.timeoutTask.cancel(false);
                 }
+                dispatchCallbacks(pc, result);
+                pc.future.complete(new ShellResult.Completed(result));
+                pending.remove(pc.id);
             }
         }
 
         /**
          * 按退出码分发 output/error 回调：先全局监听器，后命令专属监听器。
+         * <p>
+         * 回调在读取线程上执行；回调内请勿同步调用 {@link ShellTool#exec()}（会阻塞读取线程自身）。
          *
          * @param pc     命令数据
          * @param result 命令结果
          */
-        private void dispatchCallbacks(@NonNull PendingCommand pc, @NonNull ShellResult result) {
+        private void dispatchCallbacks(@NonNull PendingCommand pc, @NonNull CommandResult result) {
             boolean success = "0".equals(result.exitCode());
             if (globalExecListeners != null) {
                 try {
@@ -922,7 +1006,8 @@ public final class ShellTool {
         }
 
         /**
-         * 某条流结束时触发：进程异常死亡则上报 brokenPipe 并关闭；否则将缺失该流标记的在途命令以空数据完成。
+         * 某条流结束时触发：进程异常死亡则上报 brokenPipe 并关闭；进程存活但流已终止
+         * （如命令重定向关闭流）则按会话失效处理，在途命令以失败完成、残留输出交 brokenPipe 诊断。
          *
          * @param isError  是否错误流结束
          * @param leftover 流结束时残留的未归属输出行
@@ -936,20 +1021,7 @@ public final class ShellTool {
                 shellImpl.onBrokenPipe(leftover);
                 return;
             }
-            for (PendingCommand pc : pending.values()) {
-                if (pc.future.isDone()) {
-                    continue;
-                }
-                if (isError && !pc.errArrived) {
-                    pc.errLines = EMPTY;
-                    pc.errArrived = true;
-                    maybeComplete(pc);
-                } else if (!isError && !pc.outArrived) {
-                    pc.outLines = EMPTY;
-                    pc.outArrived = true;
-                    maybeComplete(pc);
-                }
-            }
+            shellImpl.onStreamClosed(leftover);
         }
 
         private void close() {
@@ -981,16 +1053,19 @@ public final class ShellTool {
          */
         private static final class Marker {
             final long id;
+            @NonNull
+            final String nonce;
             final String exitCode;
 
-            Marker(long id, @NonNull String exitCode) {
+            Marker(long id, @NonNull String nonce, @NonNull String exitCode) {
                 this.id = id;
+                this.nonce = nonce;
                 this.exitCode = exitCode;
             }
         }
 
         /**
-         * 单条命令的待处理数据：持有独立的 {@link CompletableFuture} 与收集缓冲。
+         * 单条命令的待处理数据：持有独立的 {@link CompletableFuture}、随机 nonce 与收集缓冲。
          */
         static final class PendingCommand {
             final long id;
@@ -1002,23 +1077,29 @@ public final class ShellTool {
             @Nullable
             final IExecListener perCmdListener;
             /**
-             * 命令是否已被完整执行一次（回调 + 完成 + 清理），用于双读取线程并发防护。
+             * 本命令结束标记前缀中携带的随机 nonce，用于校验标记真伪。
+             */
+            @NonNull
+            final String nonce;
+            /**
+             * 命令是否已被完整执行一次（回调 + 完成 + 清理），用于双读取线程与超时任务并发防护。
              */
             final AtomicBoolean completed = new AtomicBoolean();
-            volatile boolean outArrived;
-            volatile boolean errArrived;
+            volatile boolean isOutArrived;
+            volatile boolean isErrArrived;
             volatile String[] outLines;
             volatile String[] errLines;
             volatile String exitCode = "-1";
             volatile ScheduledFuture<?> timeoutTask;
 
             PendingCommand(long id, int generation, @NonNull String command,
-                           @Nullable IExecListener perCmdListener) {
+                           @Nullable IExecListener perCmdListener, @NonNull String nonce) {
                 this.id = id;
                 this.generation = generation;
                 this.command = command;
                 this.future = new CompletableFuture<>();
                 this.perCmdListener = perCmdListener;
+                this.nonce = nonce;
             }
         }
     }

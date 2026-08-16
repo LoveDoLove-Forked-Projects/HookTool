@@ -18,12 +18,6 @@
  */
 package com.hchen.hooktool.utils;
 
-import static com.hchen.hooktool.helper.RangeHelper.EQ;
-import static com.hchen.hooktool.helper.RangeHelper.GE;
-import static com.hchen.hooktool.helper.RangeHelper.GT;
-import static com.hchen.hooktool.helper.RangeHelper.LE;
-import static com.hchen.hooktool.helper.RangeHelper.LT;
-import static com.hchen.hooktool.utils.InvokeTool.getStaticField;
 import static com.hchen.hooktool.utils.SystemPropTool.getProp;
 
 import android.content.Context;
@@ -37,12 +31,11 @@ import android.view.WindowManager;
 
 import androidx.annotation.NonNull;
 
+import com.hchen.hooktool.core.CoreTool;
+import com.hchen.hooktool.data.RangeMode;
+
 import java.util.List;
 import java.util.Locale;
-
-import com.hchen.hooktool.callback.IDecomposer;
-import com.hchen.hooktool.helper.RangeHelper;
-import com.hchen.hooktool.helper.TryHelper;
 
 /**
  * Android 设备与 ROM 信息查询工具类。
@@ -64,6 +57,15 @@ import com.hchen.hooktool.helper.TryHelper;
  * @author 焕晨HChen
  */
 public final class DeviceTool {
+    /**
+     * 屏幕对角线达到该英寸数即判定为平板。
+     */
+    private static final double PAD_DIAGONAL_INCHES = 7.0;
+    /**
+     * {@code persist.sys.muiltdisplay_type} 中表示平板的取值。
+     */
+    private static final int DISPLAY_TYPE_PAD = 2;
+
     private DeviceTool() {
     }
 
@@ -115,25 +117,47 @@ public final class DeviceTool {
             default -> 0f;
         };
         if (os == 0f) {
-            try {
-                os = Float.parseFloat(raw.replace("OS", ""));
-            } catch (NumberFormatException ignore) {
-                return 0f;
-            }
+            os = parseVersionFloat(raw.replace("OS", ""));
         }
         return os;
+    }
+
+    /**
+     * 将版本字符串解析为浮点数；支持多段版本串（如 {@code "2.0.201.0"}）取前两段解析，
+     * 解析失败返回 {@code -1f} 表示无法判定。
+     *
+     * @param raw 版本字符串
+     * @return 解析得到的版本号；无法解析时返回 {@code -1f}
+     */
+    private static float parseVersionFloat(String raw) {
+        if (TextUtils.isEmpty(raw)) {
+            return -1f;
+        }
+        try {
+            return Float.parseFloat(raw);
+        } catch (NumberFormatException e) {
+            String[] parts = raw.split("\\.");
+            if (parts.length >= 2) {
+                try {
+                    return Float.parseFloat(parts[0] + "." + parts[1]);
+                } catch (NumberFormatException ignore) {
+                    return -1f;
+                }
+            }
+            return -1f;
+        }
     }
 
     /**
      * 获取小米系统版本号的增量标识字符串。
      * <p>
      * 依次尝试读取 {@code ro.mi.os.version.incremental} 和 {@code ro.build.version.incremental}
-     * 系统属性，返回首个非空值。
+     * 系统属性，返回首个非空值。该标识为字符串增量后缀（如 {@code "VOMCNXM"}），非数值主版本号。
      *
      * @return 系统版本增量标识字符串，未找到时返回空字符串 {@code ""}
      */
     @NonNull
-    public static String getXiaomiVersion() {
+    public static String getXiaomiIncrementalVersion() {
         return getRomVersion(VERSION_PROPERTY_XIAOMI);
     }
 
@@ -153,13 +177,13 @@ public final class DeviceTool {
      * 获取 ColorOS 完整版本号字符串。
      * <p>
      * 读取系统属性 {@code persist.sys.oplus.ota_ver_display}。
-     * 注意：该完整版本串与 {@link #isColorOSVersion(float, int)} 使用的数值属性
+     * 注意：该完整版本串与 {@link #isColorOSVersion(float, RangeMode)} 使用的数值属性
      * （{@code ro.build.version.oplusrom.display}）不同。
      *
      * @return ColorOS 完整版本号字符串
      */
     @NonNull
-    public static String getColorOSVersion() {
+    public static String getColorOSFullVersion() {
         return getProp(VERSION_PROPERTY_COLOROS_FULL);
     }
 
@@ -203,41 +227,40 @@ public final class DeviceTool {
     /**
      * 按指定比较模式判断当前 Android SDK 版本是否满足条件。
      * <p>
-     * 若仅需相等比较，可传 {@link RangeHelper#EQ}。
+     * 若仅需相等比较，可传 {@link RangeMode#EQ}。
      *
      * @param version 目标 SDK API 级别
-     * @param mode    比较模式，取值为 {@link RangeHelper} 中定义的常量：{@code EQ}（等于）、{@code GT}（大于）、
-     *                {@code LT}（小于）、{@code GE}（大于等于）、{@code LE}（小于等于）
+     * @param mode    比较模式（{@link RangeMode}）
      * @return 满足比较条件时返回 {@code true}
      */
-    public static boolean isAndroidVersion(int version, @RangeHelper.RangeModeFlag int mode) {
-        return isMatchVersion(Build.VERSION.SDK_INT, version, mode);
+    public static boolean isAndroidVersion(int version, @NonNull RangeMode mode) {
+        return mode.matches(Build.VERSION.SDK_INT, version);
     }
 
     /**
      * 按指定比较模式判断当前 MIUI 版本是否满足条件。
      * <p>
-     * 若仅需相等比较，可传 {@link RangeHelper#EQ}。
+     * 若仅需相等比较，可传 {@link RangeMode#EQ}。
      *
      * @param version 目标 MIUI 版本号
-     * @param mode    比较模式
+     * @param mode    比较模式（{@link RangeMode}）
      * @return 满足比较条件时返回 {@code true}
      */
-    public static boolean isMiuiVersion(float version, @RangeHelper.RangeModeFlag int mode) {
-        return isMatchVersion(getMiuiVersion(), version, mode);
+    public static boolean isMiuiVersion(float version, @NonNull RangeMode mode) {
+        return mode.matches(getMiuiVersion(), version);
     }
 
     /**
      * 按指定比较模式判断当前 HyperOS 版本是否满足条件。
      * <p>
-     * 若仅需相等比较，可传 {@link RangeHelper#EQ}。
+     * 若仅需相等比较，可传 {@link RangeMode#EQ}。
      *
      * @param version 目标 HyperOS 版本号
-     * @param mode    比较模式
+     * @param mode    比较模式（{@link RangeMode}）
      * @return 满足比较条件时返回 {@code true}
      */
-    public static boolean isHyperOSVersion(float version, @RangeHelper.RangeModeFlag int mode) {
-        return isMatchVersion(getHyperOSVersion(), version, mode);
+    public static boolean isHyperOSVersion(float version, @NonNull RangeMode mode) {
+        return mode.matches(getHyperOSVersion(), version);
     }
 
     /**
@@ -249,16 +272,16 @@ public final class DeviceTool {
      *
      * @param osVersion    目标 HyperOS 主版本号
      * @param smallVersion 目标小版本号
-     * @param mode         比较模式
+     * @param mode         比较模式（{@link RangeMode}）
      * @return 主版本匹配且小版本满足比较条件时返回 {@code true}
      */
-    public static boolean isHyperOSSmallVersion(float osVersion, int smallVersion, @RangeHelper.RangeModeFlag int mode) {
-        if (isHyperOSVersion(osVersion, EQ)) {
-            String versionName = getXiaomiVersion();
+    public static boolean isHyperOSSmallVersion(float osVersion, int smallVersion, @NonNull RangeMode mode) {
+        if (isHyperOSVersion(osVersion, RangeMode.EQ)) {
+            String versionName = getXiaomiIncrementalVersion();
             String[] vs = versionName.trim().split("\\.");
             if (vs.length >= 3) {
                 try {
-                    return isMatchVersion(Integer.parseInt(vs[2]), smallVersion, mode);
+                    return mode.matches(Integer.parseInt(vs[2]), smallVersion);
                 } catch (NumberFormatException e) {
                     return false;
                 }
@@ -271,43 +294,16 @@ public final class DeviceTool {
     /**
      * 按指定比较模式判断当前 ColorOS 版本是否满足条件。
      * <p>
-     * 读取系统属性 {@code ro.build.version.oplusrom.display}（形如 {@code "15.0"}）并转为数值比较。
-     * 若仅需相等比较，可传 {@link RangeHelper#EQ}。
+     * 读取系统属性 {@code ro.build.version.oplusrom.display}（形如 {@code "15.0"}）并转为数值比较，
+     * 多段版本串（如 {@code "15.0.0.700"}）取前两段解析。若仅需相等比较，可传 {@link RangeMode#EQ}。
      *
      * @param version 目标 ColorOS 版本号
-     * @param mode    比较模式
+     * @param mode    比较模式（{@link RangeMode}）
      * @return 满足比较条件时返回 {@code true}
      */
-    public static boolean isColorOSVersion(float version, @RangeHelper.RangeModeFlag int mode) {
+    public static boolean isColorOSVersion(float version, @NonNull RangeMode mode) {
         String v = getProp(VERSION_PROPERTY_COLOROS); // result like "15.0"
-        try {
-            return isMatchVersion(Float.parseFloat(v), version, mode);
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
-
-    private static boolean isMatchVersion(float version, float targetVersion, @RangeHelper.RangeModeFlag int mode) {
-        switch (mode) {
-            case EQ -> {
-                return version == targetVersion;
-            }
-            case GT -> {
-                return version > targetVersion;
-            }
-            case LT -> {
-                return version < targetVersion;
-            }
-            case GE -> {
-                return version >= targetVersion;
-            }
-            case LE -> {
-                return version <= targetVersion;
-            }
-            default -> {
-                return false;
-            }
-        }
+        return mode.matches(parseVersionFloat(v), version);
     }
 
     // ----------------------- 品牌 / ROM 判定 -------------------------
@@ -375,7 +371,8 @@ public final class DeviceTool {
      * 判断当前系统是否为 MIUI。
      * <p>
      * 通过读取 {@code ro.miui.ui.version.name} 并映射为版本号，非零即视为 MIUI，
-     * 与 {@link #getMiuiVersion()} 口径一致。
+     * 与 {@link #getMiuiVersion()} 口径一致。注意：HyperOS 机型通常同时保留 MIUI 属性，
+     * 因此 {@link #isMiui()} 与 {@link #isHyperOS()} 可能在部分机型上同真。
      *
      * @return 当前系统为 MIUI 时返回 {@code true}
      */
@@ -386,13 +383,13 @@ public final class DeviceTool {
     /**
      * 判断当前系统是否为 HyperOS（小米澎湃 OS）。
      * <p>
-     * 通过读取 {@code ro.mi.os.version.name} 并映射为版本号，非零即视为 HyperOS，
-     * 与 {@link #getHyperOSVersion()} 口径一致。
+     * 通过检查 {@code ro.mi.os.version.name} 属性是否存在来判断（而非版本号是否为 0），
+     * 避免"版本恰为 0"与"非 HyperOS"的哨兵冲突；与 {@link #getHyperOSVersion()} 口径一致。
      *
      * @return 当前系统为 HyperOS 时返回 {@code true}
      */
     public static boolean isHyperOS() {
-        return getHyperOSVersion() != 0f;
+        return !TextUtils.isEmpty(getProp(VERSION_PROPERTY_HYPER_OS).trim());
     }
 
     /**
@@ -445,12 +442,7 @@ public final class DeviceTool {
      * @return 当前 MIUI 为国际版时返回 {@code true}
      */
     public static boolean isMiuiInternational() {
-        return TryHelper.doTry(new IDecomposer<Boolean>() {
-            @Override
-            public Boolean get() throws Throwable {
-                return Boolean.TRUE.equals(getStaticField("miui.os.Build", "IS_INTERNATIONAL_BUILD"));
-            }
-        }).getOrDefault(false);
+        return Boolean.TRUE.equals(CoreTool.getStaticFieldIfExists("miui.os.Build", "IS_INTERNATIONAL_BUILD"));
     }
 
     // ----------------------- 平板识别 -------------------------
@@ -470,7 +462,7 @@ public final class DeviceTool {
      *     </li>
      * </ol>
      *
-     * @param context 上下文对象，不得为 {@code null}
+     * @param context 非空上下文
      * @return 判定为平板设备时返回 {@code true}
      */
     public static boolean isPad(@NonNull Context context) {
@@ -491,17 +483,7 @@ public final class DeviceTool {
      * @return 是小米平板时返回 {@code true}
      */
     public static boolean isXiaomiPad() {
-        return TryHelper.doTry(new IDecomposer<Boolean>() {
-            @Override
-            public Boolean get() throws Throwable {
-                return Boolean.TRUE.equals(
-                    getStaticField(
-                        "miui.os.Build",
-                        "IS_TABLET"
-                    )
-                );
-            }
-        }).getOrDefault(false);
+        return Boolean.TRUE.equals(CoreTool.getStaticFieldIfExists("miui.os.Build", "IS_TABLET"));
     }
 
     private static boolean isPadByProp() {
@@ -513,17 +495,19 @@ public final class DeviceTool {
 
         // 注意：persist.sys.muiltdisplay_type 为 OEM 真实键名（含拼写错误 muilt），需照搬
         int multiDisplayType = getProp("persist.sys.muiltdisplay_type", 0);
-        return multiDisplayType == 2;
+        return multiDisplayType == DISPLAY_TYPE_PAD;
     }
 
     private static boolean isPadBySize(@NonNull Context context) {
-        WindowManager windowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-        if (windowManager == null) return false;
+        Object service = context.getSystemService(Context.WINDOW_SERVICE);
+        if (!(service instanceof WindowManager windowManager)) return false;
         Rect bounds = windowManager.getCurrentWindowMetrics().getBounds();
         DisplayMetrics dm = context.getResources().getDisplayMetrics();
+        // xdpi/ydpi 为 0 时（异常 ROM）避免除零产生 Infinity 误判平板。
+        if (dm.xdpi == 0f || dm.ydpi == 0f) return false;
         double x = Math.pow(bounds.width() / dm.xdpi, 2);
         double y = Math.pow(bounds.height() / dm.ydpi, 2);
-        return Math.sqrt(x + y) >= 7.0;
+        return Math.sqrt(x + y) >= PAD_DIAGONAL_INCHES;
     }
 
     private static boolean isPadByApi(@NonNull Context context) {

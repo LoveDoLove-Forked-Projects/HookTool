@@ -46,6 +46,7 @@ import java.util.Map;
  *   <li>模块加载、包加载、包就绪、系统服务启动、Application 创建等回调</li>
  * </ul>
  *
+ * @author 焕晨HChen
  * @see ModuleEntrance
  * @see TestHook
  */
@@ -71,9 +72,7 @@ public class HookEntrance extends ModuleEntrance {
         ModuleConfig.setLogTag("TestDemo");
         ModuleConfig.setLogLevel(ModuleConfig.LOG_D);
         ModuleConfig.setPrefsName("test_demo_prefs");
-        ModuleConfig.setLogExpandPaths(new String[]{
-            "com.hchen.app.hook"
-        });
+        ModuleConfig.setLogExpandPaths("com.hchen.app.hook");
         ModuleConfig.setShowHookSuccessLog(true);
     }
 
@@ -132,7 +131,8 @@ public class HookEntrance extends ModuleEntrance {
      * 并在此基础上完成以下操作：</p>
      * <ul>
      *   <li>通过 {@link ModuleData#setClassLoader} 设置全局类加载器</li>
-     *   <li>创建并初始化 {@link TestHook} 模块实例</li>
+     *   <li>将就绪事件分发给 {@link TestHook} 与 {@link TestHookKt} 两个子模块实例
+     *       （实例在字段初始化时创建，此处仅委托）</li>
      * </ul>
      *
      * @param param 包就绪参数，提供目标应用的类加载器和组件工厂等信息
@@ -146,6 +146,7 @@ public class HookEntrance extends ModuleEntrance {
 
         ModuleData.setClassLoader(param.getClassLoader());
         testHook.handlePackageReady(param);
+        testHookKt.handlePackageReady(param);
     }
 
     /**
@@ -211,7 +212,7 @@ public class HookEntrance extends ModuleEntrance {
      */
     @Override
     public void handleHotReloadingFailed(@NonNull Throwable throwable) {
-        AndroidLog.logE(TAG, "handleHotReloadingFailed: " + throwable);
+        AndroidLog.logE(TAG, "handleHotReloadingFailed", throwable);
         super.handleHotReloadingFailed(throwable);
     }
 

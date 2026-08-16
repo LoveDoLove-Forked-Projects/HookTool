@@ -18,6 +18,7 @@
  */
 package com.hchen.hooktool.helper
 
+import com.hchen.hooktool.helper.CoreHelper.Optional.Companion.empty
 import com.hchen.hooktool.helper.CoreHelper.findClass
 import com.hchen.hooktool.helper.CoreHelper.findConstructorBestMatch
 import com.hchen.hooktool.helper.CoreHelper.findConstructorExact
@@ -32,12 +33,12 @@ import com.hchen.hooktool.helper.CoreHelper.getObjectTransformationCost
 import com.hchen.hooktool.helper.CoreHelper.getPrimitivePromotionCost
 import com.hchen.hooktool.helper.CoreHelper.removeAdditionalInstanceField
 import com.hchen.hooktool.helper.CoreHelper.setAdditionalInstanceField
+import java.lang.ref.WeakReference
 import java.lang.reflect.Constructor
 import java.lang.reflect.Field
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
-import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 
@@ -56,7 +57,7 @@ import java.util.concurrent.ConcurrentHashMap
  * 并完整支持 Java 8+ 接口 default 方法的深度查找。
  *
  * 本类为公开 `object`，其方法通过 [@JvmStatic] 暴露，Java 侧可直接以
- * `CoreHelper.xxx` 静态方式调用（见 [InvokeTool]）。该类的定位是工具库的内部实现核心，
+ * `CoreHelper.xxx` 静态方式调用。该类的定位是工具库的内部实现核心，
  * 对外公开 API 主要由 [com.hchen.hooktool.core.CoreTool] 提供。
  *
  * @author 焕晨HChen
@@ -70,6 +71,15 @@ object CoreHelper {
 
     /** 构造函数缓存，以 [Class] 为键，构造函数签名到 [Optional] 包装的 [Constructor] 的并发映射为值。 */
     private val constructorCache = WeakHashMap<Class<*>, ConcurrentHashMap<String, Optional<Constructor<*>>>>()
+
+    /** 类缓存键：按「类加载器身份哈希 + 类名」隔离不同加载器加载的同名类。 */
+    private data class ClassCacheKey(val loaderId: Int, val className: String)
+
+    /**
+     * 类缓存：值为 [WeakReference] 包装的 [Class]。若直接以 [Class] 为值，会经"类强引用其加载器"
+     * 反向钉住 [WeakHashMap] 的弱键，导致加载器无法回收；弱引用值解除了该自环。
+     */
+    private val classCache = ConcurrentHashMap<ClassCacheKey, WeakReference<Class<*>>>()
 
     /**
      * 获取指定类对应的字段缓存映射。
@@ -151,6 +161,17 @@ object CoreHelper {
          */
         fun getOrNull(): T? = ref?.get()
 
+        /**
+         * 判断本实例是否为"查找失败"的负结果（从未持有有效值）。
+         * <p>
+         * 空态（[empty]）的引用字段恒为 `null`，而"弱引用被 GC 清除"的实例引用字段
+         * 非 `null`（仅 `get()` 返回 `null`）。据此可区分负结果与自愈重算两种缓存路径，
+         * 使负结果命中时直接短路，避免每次调用都重扫反射。
+         *
+         * @return 本实例为负结果时返回 `true`
+         */
+        fun isEmpty(): Boolean = ref == null
+
         companion object {
             /** 全局共享的空 [Optional] 单例，避免重复创建空实例。 */
             private val EMPTY = Optional<Any>(null)
@@ -194,6 +215,8 @@ object CoreHelper {
         while (true) {
             val cached = map[key]
             if (cached != null) {
+                // 负结果（查找失败）快速短路：直接抛错，避免每次调用重扫反射与构造异常链。
+                if (cached.isEmpty()) throw error()
                 val value = cached.getOrNull()
                 if (value != null) return value
                 // 弱引用已被 GC 清除，重新计算并原子替换
@@ -765,13 +788,34 @@ object CoreHelper {
      */
     @JvmStatic
     fun findClass(className: String, classLoader: ClassLoader?): Class<*> {
+        val loader = getSafeClassLoader(classLoader)
+        val key = ClassCacheKey(System.identityHashCode(loader), className)
+        val cached = classCache[key]?.get()
+        if (cached != null && cached.classLoader === loader) {
+            return cached
+        }
+        val clazz = doFindClass(className, loader)
+        // 仅缓存成功结果：负结果不缓存，避免运行期动态加载（如后续 DexClassLoader）的类被"找不到"永久遮蔽。
+        classCache[key] = WeakReference(clazz)
+        return clazz
+    }
+
+    /**
+     * 执行实际的类查找：支持基本类型、数组、普通类与内部类（`.` 与 `$` 互替重试）。
+     *
+     * @param className   需要查找的类名。
+     * @param classLoader 保证非 `null` 的类加载器。
+     * @return 对应的 [Class] 对象。
+     * @throws NoClassDefFoundError 无法找到指定类时抛出。
+     */
+    private fun doFindClass(className: String, classLoader: ClassLoader): Class<*> {
         var next = className
         var lastDotIndex = -1
         do {
             try {
                 val primitive = PRIMITIVE_NAME_MAP[next]
                 if (primitive != null) return primitive
-                return Class.forName(toCanonicalName(next), false, getSafeClassLoader(classLoader))
+                return Class.forName(toCanonicalName(next), false, classLoader)
             } catch (_: ClassNotFoundException) {
                 lastDotIndex = next.lastIndexOf('.')
                 if (lastDotIndex != -1) {
@@ -1341,7 +1385,8 @@ object CoreHelper {
             val method = findMethodBestMatch(obj.javaClass, methodName, *args)
             if (Modifier.isStatic(method.modifiers)) {
                 throw IllegalArgumentException(
-                    "Method $methodName is static, call with callStaticMethod instead.")
+                    "Method $methodName is static, call with callStaticMethod instead."
+                )
             }
             method.invoke(obj, *args)
         } catch (e: IllegalAccessException) {
@@ -1371,7 +1416,8 @@ object CoreHelper {
             val method = findMethodBestMatch(obj.javaClass, methodName, *parameterTypes)
             if (Modifier.isStatic(method.modifiers)) {
                 throw IllegalArgumentException(
-                    "Method $methodName is static, call with callStaticMethod instead.")
+                    "Method $methodName is static, call with callStaticMethod instead."
+                )
             }
             method.invoke(obj, *args)
         } catch (e: IllegalAccessException) {
@@ -1403,7 +1449,8 @@ object CoreHelper {
             val method = findMethodBestMatch(clazz, methodName, *args)
             if (!Modifier.isStatic(method.modifiers)) {
                 throw IllegalArgumentException(
-                    "Method $methodName is not static, call with callMethod instead.")
+                    "Method $methodName is not static, call with callMethod instead."
+                )
             }
             method.invoke(null, *args)
         } catch (e: IllegalAccessException) {
@@ -1434,7 +1481,8 @@ object CoreHelper {
             val method = findMethodBestMatch(clazz, methodName, *parameterTypes)
             if (!Modifier.isStatic(method.modifiers)) {
                 throw IllegalArgumentException(
-                    "Method $methodName is not static, call with callMethod instead.")
+                    "Method $methodName is not static, call with callMethod instead."
+                )
             }
             method.invoke(null, *args)
         } catch (e: IllegalAccessException) {

@@ -24,6 +24,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.hchen.hooktool.ModuleEntrance;
+import com.hchen.hooktool.log.XposedLog;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -62,6 +63,10 @@ import io.github.libxposed.api.XposedModuleInterface;
 public final class HookRegistry {
     private static final Set<AbsHook> hooks =
         Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
+    /**
+     * {@code thisObject} 自动保存/恢复使用的键命名空间前缀，避免与用户自定义状态键碰撞。
+     */
+    private static final String THIS_OBJECT_PREFIX = "__hooktool_thisObject:";
 
     private HookRegistry() {
         throw new AssertionError("No instances!");
@@ -181,11 +186,12 @@ public final class HookRegistry {
         // Phase 2: 自动保存 thisObject（以类名去重，同一类的多个方法共享一份）
         // 使用 putIfAbsent 避免重复，因为同一类的多个方法具有相同的类级 key，
         // 无需多次保存，第一次写入后后续的 putIfAbsent 不会覆盖。
+        // 键加命名空间前缀，避免与用户自定义状态键碰撞导致恢复出类型错误的 thisObject。
         // 静态方法的 thisObject 始终为 null，此处不会存储任何数据。
         for (Object o : snapshot) {
             AbsHook hook = (AbsHook) o;
             if (hook.key != null && hook.thisObject != null) {
-                merged.putIfAbsent(hook.key, hook.thisObject);
+                merged.putIfAbsent(THIS_OBJECT_PREFIX + hook.key, hook.thisObject);
             }
         }
 
@@ -229,7 +235,8 @@ public final class HookRegistry {
      * <p>
      * 与 {@link #reloading(Bundle)} 不同，此方法<strong>不会</strong>清空注册表，
      * 因为热重载完成后新创建的钩子实例需要继续被追踪。
-     * 注册表的清空在 {@link #reloading(Bundle)} 中已完成。
+     * 注册表的清空由 {@link ModuleEntrance#onHotReloading} 在状态保存成功后统一调用
+     * {@link #clear()} 完成。
      *
      * @param param 热重载完成参数，包含之前通过 {@code param.setSavedInstanceState(merged)}
      *              保存的全局状态快照，不为 {@code null}
@@ -247,14 +254,19 @@ public final class HookRegistry {
 
         for (Object o : snapshot) {
             AbsHook hook = (AbsHook) o;
-            Object savedThisObject = (hook.key != null && !hook.isStatic)
-                ? inState.get(hook.key) : null;
+            try {
+                Object savedThisObject = (hook.key != null && !hook.isStatic)
+                    ? inState.get(THIS_OBJECT_PREFIX + hook.key) : null;
 
-            if (!hook.isStatic) {
-                if (hook.thisObject != null) savedThisObject = hook.thisObject;
-                else hook.thisObject = savedThisObject;
+                if (!hook.isStatic) {
+                    if (hook.thisObject != null) savedThisObject = hook.thisObject;
+                    else hook.thisObject = savedThisObject;
+                }
+                hook.onHotReloaded(savedThisObject, inState);
+            } catch (Throwable e) {
+                // 单个钩子的状态恢复失败不阻断其余钩子，避免热更新后集体半初始化。
+                XposedLog.logW("HookRegistry", "onHotReloaded failed for hook: " + hook, e);
             }
-            hook.onHotReloaded(savedThisObject, inState);
         }
     }
 }

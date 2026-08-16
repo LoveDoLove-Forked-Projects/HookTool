@@ -33,9 +33,15 @@ import com.hchen.app.R;
 /**
  * HookTool 示例应用的主界面 Activity。
  *
+ * @author 焕晨HChen
  * @see AppCompatActivity
  */
 public class MainActivity extends AppCompatActivity {
+    /**
+     * 初始化主界面并应用 Edge-to-Edge 边到边布局。
+     *
+     * @param savedInstanceState 保存的实例状态，可为 {@code null}
+     */
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);

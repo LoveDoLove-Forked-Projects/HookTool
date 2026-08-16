@@ -63,9 +63,8 @@ public interface IAppDataGetter<T> {
      *
      * @param pm 用于执行包信息查询的 {@link PackageManager} 实例，不为 {@code null}
      * @return 包含目标应用包信息的列表，不为 {@code null}；列表元素也不得为 {@code null}，
-     *         且元素类型必须落在类注释列出的受支持类型集合内
-     * @throws PackageManager.NameNotFoundException 当查询的包信息无法获取时抛出
+     * 且元素类型必须落在类注释列出的受支持类型集合内
      */
     @NonNull
-    List<T> getPackages(@NonNull PackageManager pm) throws PackageManager.NameNotFoundException;
+    List<T> getPackages(@NonNull PackageManager pm);
 }
